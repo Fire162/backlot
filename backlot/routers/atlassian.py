@@ -1355,7 +1355,9 @@ async def confluence_cql_search(request: Request):
     if term:
         everything = store.search_documents(conn, term, "confluence", ids, limit=100_000, offset=0)
     else:
-        everything = store.list_documents(conn, "confluence", container=None, visible_ids=ids, limit=100_000, offset=0)
+        everything = store.list_documents(
+            conn, "confluence", container=None, visible_ids=ids, limit=100_000, offset=0
+        )
 
     def _match(r) -> bool:
         if space_unresolvable:

@@ -239,7 +239,7 @@ def integer_conversion_failure(path: str, name: str, values: list[str]) -> Atlas
 
 def cql_required() -> AtlassianError:
     """Confluence's refusal of a search request without a `cql` parameter or with an empty one.
-    
+
     Measured against Confluence Cloud: missing or empty `cql` query param returns a 400
     BadRequestException.
     """
