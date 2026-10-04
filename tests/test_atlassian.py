@@ -557,6 +557,54 @@ def test_confluence_cql_search_filtered_by_space(client, admin_h):
     assert bogus["results"] == [] and bogus["totalSize"] == 0
 
 
+def test_confluence_cql_search_requires_cql_param(client, admin_h):
+    """Real Confluence Cloud refuses requests with missing or empty cql parameter (#427)."""
+    # missing parameter
+    no_param = client.get("/atlassian/wiki/rest/api/search", headers=admin_h)
+    assert no_param.status_code == 400
+    assert no_param.json()["message"] == (
+        "com.atlassian.confluence.api.service.exceptions.api.BadRequestException: "
+        "cql query parameter is required"
+    )
+
+    # empty cql param: ?cql=
+    empty = client.get("/atlassian/wiki/rest/api/search?cql=", headers=admin_h)
+    assert empty.status_code == 400
+    assert empty.json()["message"] == (
+        "com.atlassian.confluence.api.service.exceptions.api.BadRequestException: "
+        "cql query parameter is required"
+    )
+
+    # whitespace-only cql param: ?cql=%20
+    ws = client.get("/atlassian/wiki/rest/api/search?cql=%20", headers=admin_h)
+    assert ws.status_code == 400
+    assert ws.json()["message"] == (
+        "com.atlassian.confluence.api.service.exceptions.api.BadRequestException: "
+        "cql query parameter is required"
+    )
+
+
+def test_confluence_cql_search_without_text_term(client, admin_h):
+    """CQL queries like `type=page` or `space=handbook` with no `~` clause match rows (#427)."""
+    res = client.get(
+        "/atlassian/wiki/rest/api/search",
+        headers=admin_h,
+        params={"cql": "type=page"},
+    ).json()
+    assert res["totalSize"] > 0
+    assert len(res["results"]) > 0
+    assert all(r["content"]["type"] == "page" for r in res["results"])
+
+    res_space = client.get(
+        "/atlassian/wiki/rest/api/search",
+        headers=admin_h,
+        params={"cql": "space=handbook"},
+    ).json()
+    assert res_space["totalSize"] > 0
+    assert len(res_space["results"]) > 0
+    assert all(r["content"]["space"]["name"] == "handbook" for r in res_space["results"])
+
+
 def test_confluence_storage_roundtrip(client, admin_h, ro_conn):
     doc = ro_conn.execute("SELECT * FROM confluence_pages LIMIT 1").fetchone()
     cid = doc["id"]

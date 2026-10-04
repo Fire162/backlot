@@ -1321,7 +1321,9 @@ async def confluence_cql_search(request: Request):
     conn = auth.conn(request)
     caller = _confluence_caller(request)
     ids = auth.visible_ids(request, caller)
-    cql = _str_param(request, "cql", "") or ""
+    if "cql" not in request.query_params or not request.query_params.get("cql", "").strip():
+        raise errors_atlassian.cql_required()
+    cql = request.query_params.get("cql", "")
     m = re.search(r'(?:text|title)\s*~\s*"?([^"~]+)"?', cql) or re.search(r'~\s*"?([^"~]+)"?', cql)
     term = m.group(1).strip() if m else ""
     # honor the common structured CQL clauses: space / type / label
@@ -1350,7 +1352,10 @@ async def confluence_cql_search(request: Request):
 
     # fetch the full ACL-visible match set, filter by the clauses, then paginate — so
     # totalSize reflects the true match count (not just the returned page).
-    everything = store.search_documents(conn, term, "confluence", ids, limit=100_000, offset=0)
+    if term:
+        everything = store.search_documents(conn, term, "confluence", ids, limit=100_000, offset=0)
+    else:
+        everything = store.list_documents(conn, "confluence", container=None, visible_ids=ids, limit=100_000, offset=0)
 
     def _match(r) -> bool:
         if space_unresolvable:

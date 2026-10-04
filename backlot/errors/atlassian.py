@@ -237,6 +237,25 @@ def integer_conversion_failure(path: str, name: str, values: list[str]) -> Atlas
     )
 
 
+def cql_required() -> AtlassianError:
+    """Confluence's refusal of a search request without a `cql` parameter or with an empty one.
+    
+    Measured against Confluence Cloud: missing or empty `cql` query param returns a 400
+    BadRequestException.
+    """
+    return AtlassianError(
+        400,
+        {
+            "statusCode": 400,
+            "data": {"authorized": True, "valid": True, "errors": [], "successful": True},
+            "message": (
+                "com.atlassian.confluence.api.service.exceptions.api.BadRequestException: "
+                "cql query parameter is required"
+            ),
+        },
+    )
+
+
 def start_too_large() -> AtlassianError:
     """`content`'s refusal of a `start` above 100000, which `space` does not share.
 
