@@ -238,10 +238,15 @@ def integer_conversion_failure(path: str, name: str, values: list[str]) -> Atlas
 
 
 def cql_required() -> AtlassianError:
-    """Confluence's refusal of a search request without a `cql` parameter or with an empty one.
+    """The CQL search's refusal of a request whose first `cql` is absent or empty.
 
-    Measured against Confluence Cloud: missing or empty `cql` query param returns a 400
-    BadRequestException.
+    Measured 2026-10-05: no `cql`, `?cql=` and a bare `?cql` are this 400, and so is
+    `?CQL=type=page`, the name being case-sensitive. A repeated `cql` is read from its first value:
+    `?cql=&cql=type=page` is this 400 and `?cql=type=page&cql=` a 200. It comes ahead of the
+    negative `limit`/`start` refusal, so `?limit=-1` with no `cql` is this 400. The body carries the
+    `data` object :func:`start_too_large` describes. A whitespace-only `cql` (`%20`, `%09`) is not
+    this refusal: real answers it after the negative one with `Could not parse cql : `, its message
+    for a CQL it cannot parse, and this server does not check CQL syntax.
     """
     return AtlassianError(
         400,

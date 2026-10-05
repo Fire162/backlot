@@ -557,52 +557,111 @@ def test_confluence_cql_search_filtered_by_space(client, admin_h):
     assert bogus["results"] == [] and bogus["totalSize"] == 0
 
 
-def test_confluence_cql_search_requires_cql_param(client, admin_h):
-    """Real Confluence Cloud refuses requests with missing or empty cql parameter (#427)."""
-    # missing parameter
-    no_param = client.get("/atlassian/wiki/rest/api/search", headers=admin_h)
-    assert no_param.status_code == 400
-    assert no_param.json()["message"] == (
+_CQL_REQUIRED = {
+    "statusCode": 400,
+    "data": {"authorized": True, "valid": True, "errors": [], "successful": True},
+    "message": (
         "com.atlassian.confluence.api.service.exceptions.api.BadRequestException: "
         "cql query parameter is required"
+    ),
+}
+_LIMIT_BELOW_ZERO = {
+    "statusCode": 400,
+    "message": "java.lang.IllegalArgumentException: limit cannot be less than zero",
+}
+
+
+@pytest.mark.parametrize(
+    "query, status, body",
+    [
+        ("", 400, _CQL_REQUIRED),
+        ("cql=", 400, _CQL_REQUIRED),
+        ("cql", 400, _CQL_REQUIRED),
+        ("CQL=type%3Dpage", 400, _CQL_REQUIRED),
+        ("cql=&cql=type%3Dpage", 400, _CQL_REQUIRED),
+        ("cql=type%3Dpage&cql=", 200, None),
+        ("limit=-1", 400, _CQL_REQUIRED),
+        ("cql=type%3Dpage&limit=-1", 400, _LIMIT_BELOW_ZERO),
+        ("cql=%20&limit=-1", 400, _LIMIT_BELOW_ZERO),
+    ],
+)
+def test_confluence_cql_search_refuses_a_request_with_no_first_cql(
+    client, admin_h, query, status, body
+):
+    """The requests :func:`backlot.errors.atlassian.cql_required` records, beside the ones that pass
+    it on to the negative refusal or to the search."""
+    r = client.get(f"/atlassian/wiki/rest/api/search?{query}", headers=admin_h)
+    assert r.status_code == status, r.text
+    if body is not None:
+        assert r.json() == body
+
+
+def test_confluence_cql_search_with_no_tilde_selects_by_its_clauses(tmp_path):
+    """Pins what :func:`backlot.routers.atlassian.confluence_cql_search` says a CQL with no `~`
+    clause answers, for the admin and for a caller one page is hidden from.
+
+    Not SAMPLE: it holds pages alone, so a `type` clause would select the same rows as no clause."""
+    from backlot import synth
+
+    settings = tiny_corpus(
+        tmp_path,
+        [
+            {
+                "source_type": "confluence",
+                "doc_id": "q-guide",
+                "space": "eng",
+                "title": "Guide",
+                "content": "Body.",
+                "author_email": "ava@acme.com",
+                "visibility": "public",
+                "labels": ["runbook"],
+            },
+            {
+                "source_type": "confluence",
+                "doc_id": "q-post",
+                "space": "eng",
+                "subtype": "blogpost",
+                "title": "Post",
+                "content": "Body.",
+                "author_email": "ava@acme.com",
+                "visibility": "public",
+            },
+            {
+                "source_type": "confluence",
+                "doc_id": "q-shut",
+                "space": "ops",
+                "title": "Shut",
+                "content": "Body.",
+                "author_email": "bob@acme.com",
+                "visibility": "private",
+            },
+        ],
     )
-
-    # empty cql param: ?cql=
-    empty = client.get("/atlassian/wiki/rest/api/search?cql=", headers=admin_h)
-    assert empty.status_code == 400
-    assert empty.json()["message"] == (
-        "com.atlassian.confluence.api.service.exceptions.api.BadRequestException: "
-        "cql query parameter is required"
-    )
-
-    # whitespace-only cql param: ?cql=%20
-    ws = client.get("/atlassian/wiki/rest/api/search?cql=%20", headers=admin_h)
-    assert ws.status_code == 400
-    assert ws.json()["message"] == (
-        "com.atlassian.confluence.api.service.exceptions.api.BadRequestException: "
-        "cql query parameter is required"
-    )
-
-
-def test_confluence_cql_search_without_text_term(client, admin_h):
-    """CQL queries like `type=page` or `space=handbook` with no `~` clause match rows (#427)."""
-    res = client.get(
-        "/atlassian/wiki/rest/api/search",
-        headers=admin_h,
-        params={"cql": "type=page"},
-    ).json()
-    assert res["totalSize"] > 0
-    assert len(res["results"]) > 0
-    assert all(r["content"]["type"] == "page" for r in res["results"])
-
-    res_space = client.get(
-        "/atlassian/wiki/rest/api/search",
-        headers=admin_h,
-        params={"cql": "space=handbook"},
-    ).json()
-    assert res_space["totalSize"] > 0
-    assert len(res_space["results"]) > 0
-    assert all(r["content"]["space"]["name"] == "handbook" for r in res_space["results"])
+    eng = synth.confluence_space_key("eng")
+    rows = [
+        # cql, the titles the admin is served, the titles ava is served
+        ("type=page", {"Guide", "Shut"}, {"Guide"}),
+        ("type=blogpost", {"Post"}, {"Post"}),
+        (f"space={eng}", {"Guide", "Post"}, {"Guide", "Post"}),
+        (f"space={eng} and type=page", {"Guide"}, {"Guide"}),
+        ("label=runbook", {"Guide"}, {"Guide"}),
+        ("space=NOPE", set(), set()),
+        ('title="Guide"', set(), set()),
+    ]
+    with client_for(settings, reload=True) as c:
+        written = yaml.safe_load(settings.tokens_path.read_text())
+        tokens = {u["email"]: u["token"] for u in written["users"]}
+        callers = {
+            "admin": {"Authorization": f"Bearer {written['admin_token']}"},
+            "ava": {"Authorization": f"Bearer {tokens['ava@acme.com']}"},
+        }
+        for cql, admin, ava in rows:
+            for who, want in (("admin", admin), ("ava", ava)):
+                r = c.get(
+                    "/atlassian/wiki/rest/api/search", headers=callers[who], params={"cql": cql}
+                ).json()
+                assert {x["title"] for x in r["results"]} == want, (cql, who)
+                assert r["totalSize"] == len(want), (cql, who)
 
 
 def test_confluence_storage_roundtrip(client, admin_h, ro_conn):

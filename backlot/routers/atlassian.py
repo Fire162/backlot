@@ -1316,14 +1316,21 @@ async def confluence_space_get(key: str, request: Request):
 
 @router.get("/wiki/rest/api/search", response_model=ConfluenceResults, openapi_extra=_P_CQL)
 async def confluence_cql_search(request: Request):
-    """CQL search used by Confluence clients (e.g. mcp-atlassian). We parse the
-    `~ "term"` operand and do a keyword search over the ACL-visible corpus."""
+    """CQL search used by Confluence clients (e.g. mcp-atlassian). Four clauses are read: a `~`
+    operand is a keyword search over the ACL-visible corpus, and `space`, `type` and `label` filter
+    its matches, or the whole ACL-visible corpus when there is no `~`. Measured 2026-10-05 with no
+    `~`: real's `type=page` is every page on the site and `space=<KEY> and type=page` that space's
+    pages; its `space=<KEY>` also holds the space's attachments, comments and the space itself,
+    where this server answers the space's pages and blogposts. A CQL holding none of the four names
+    only fields this route does not read, and answers no row."""
     conn = auth.conn(request)
     caller = _confluence_caller(request)
     ids = auth.visible_ids(request, caller)
-    if "cql" not in request.query_params or not request.query_params.get("cql", "").strip():
+    # the first value, and ahead of the negative check below: see `errors_atlassian.cql_required`
+    cqls = request.query_params.getlist("cql")
+    if not cqls or not cqls[0]:
         raise errors_atlassian.cql_required()
-    cql = request.query_params.get("cql", "")
+    cql = cqls[0]
     m = re.search(r'(?:text|title)\s*~\s*"?([^"~]+)"?', cql) or re.search(r'~\s*"?([^"~]+)"?', cql)
     term = m.group(1).strip() if m else ""
     # honor the common structured CQL clauses: space / type / label
@@ -1354,10 +1361,12 @@ async def confluence_cql_search(request: Request):
     # totalSize reflects the true match count (not just the returned page).
     if term:
         everything = store.search_documents(conn, term, "confluence", ids, limit=100_000, offset=0)
-    else:
+    elif space_key or want_type or want_label:
         everything = store.list_documents(
             conn, "confluence", container=None, visible_ids=ids, limit=100_000, offset=0
         )
+    else:
+        everything = []
 
     def _match(r) -> bool:
         if space_unresolvable:
