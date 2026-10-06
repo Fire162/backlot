@@ -200,9 +200,21 @@ def _missing_argument(request: Request, *names: str) -> JSONResponse | None:
     is `channel_not_found`, and `ts=` on a readable channel is `thread_not_found`. Both measured,
     along with the order — a bad token is `invalid_auth` whether or not the arguments are there,
     so this sits after `_caller_or_error` rather than before it.
+
+    Measured on 2026-10-05 (#480): real Slack includes `response_metadata.messages` with one
+    `[ERROR] missing required field: <field>` message per missing argument in the order checked.
     """
-    if any(_param(request, n) is None for n in names):
-        return _err("invalid_arguments")
+    missing = [n for n in names if _param(request, n) is None]
+    if missing:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "invalid_arguments",
+                "response_metadata": {
+                    "messages": [f"[ERROR] missing required field: {n}" for n in missing]
+                },
+            }
+        )
     return None
 
 

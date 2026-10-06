@@ -671,7 +671,26 @@ def test_slack_an_absent_argument_is_not_a_thing_that_was_not_found(
         k: (_a_channel_id(client, admin_h) if v == _OWN_CHANNEL else v) for k, v in params.items()
     }
     j = client.get(f"/slack/api/{method}", headers=admin_h, params=params).json()
-    assert j == {"ok": False, "error": error}
+    expected: dict = {"ok": False, "error": error}
+    if error == "invalid_arguments":
+        # Missing required arguments include response_metadata with one [ERROR] per missing field
+        expected["response_metadata"] = {
+            "messages": [
+                f"[ERROR] missing required field: {field}"
+                for field in (
+                    ["query"]
+                    if method.startswith("search.")
+                    else (
+                        ["channel", "ts"]
+                        if method == "conversations.replies" and not params
+                        else ["ts"]
+                        if method == "conversations.replies" and "channel" in params
+                        else ["channel"]
+                    )
+                )
+            ]
+        }
+    assert j == expected
 
 
 @pytest.mark.parametrize("method", ["search.messages", "search.all", "search.files"])
