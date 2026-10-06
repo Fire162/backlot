@@ -7309,3 +7309,114 @@ def test_gmail_size_estimate_matches_raw_bytes_in_every_format(tmp_path, title, 
             thread = c.get(f"/gmail/v1/users/me/threads/{tid}?format={fmt}", headers=h)
             assert thread.status_code == 200
             assert thread.json()["messages"][0]["sizeEstimate"] == size
+
+
+def test_drive_trailing_slash_answers_route_request(client, admin_h):
+    """A trailing slash on a Drive path answers what the slash-free spelling answers,
+    rather than a 307 redirect. Runs of slashes are also stripped (#494).
+
+    Measured on 2026-10-05 against www.googleapis.com/drive/v3:
+    GET /about/, /drives/, /files/, /files/{doc}/, /files/{doc}/export/,
+    /files/{doc}/permissions/, /files// and /files/{doc}// each answer what the
+    slash-free spelling answers, and errors (400, 401, 403, 404) are preserved.
+    Inside a batch (/batch/drive/v3), the subrequest part answers 200 directly.
+    """
+    from email.generator import Generator
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.nonmultipart import MIMENonMultipart
+    from io import StringIO
+
+    files = client.get("/drive/v3/files", headers=admin_h).json()["files"]
+    doc = next(
+        (f["id"] for f in files if f.get("mimeType") == "application/vnd.google-apps.document"),
+        files[0]["id"],
+    )
+
+    # 1. Six Drive routes answer 200 with the slash-free answer
+    pairs = [
+        ("/drive/v3/about/?fields=user", "/drive/v3/about?fields=user"),
+        ("/drive/v3/drives/", "/drive/v3/drives"),
+        (
+            "/drive/v3/files/?pageSize=2&fields=files(id,name)&orderBy=name",
+            "/drive/v3/files?pageSize=2&fields=files(id,name)&orderBy=name",
+        ),
+        (
+            f"/drive/v3/files/{doc}/?fields=id,name,mimeType",
+            f"/drive/v3/files/{doc}?fields=id,name,mimeType",
+        ),
+        (
+            f"/drive/v3/files/{doc}/export/?mimeType=text/plain",
+            f"/drive/v3/files/{doc}/export?mimeType=text/plain",
+        ),
+        (
+            f"/drive/v3/files/{doc}/permissions/?fields=permissions(role,type)",
+            f"/drive/v3/files/{doc}/permissions/?fields=permissions(role,type)",
+        ),
+    ]
+    for slashed, plain in pairs:
+        r_slashed = client.get(slashed, headers=admin_h, follow_redirects=False)
+        r_plain = client.get(plain, headers=admin_h, follow_redirects=False)
+        assert r_slashed.status_code == 200, slashed
+        assert r_slashed.content == r_plain.content, slashed
+
+    # 2. Runs of trailing slashes answer 200
+    multi_pairs = [
+        (
+            "/drive/v3/files//?pageSize=1&fields=files(id)",
+            "/drive/v3/files?pageSize=1&fields=files(id)",
+        ),
+        (
+            f"/drive/v3/files/{doc}//?fields=id",
+            f"/drive/v3/files/{doc}?fields=id",
+        ),
+    ]
+    for slashed, plain in multi_pairs:
+        r_slashed = client.get(slashed, headers=admin_h, follow_redirects=False)
+        r_plain = client.get(plain, headers=admin_h, follow_redirects=False)
+        assert r_slashed.status_code == 200, slashed
+        assert r_slashed.content == r_plain.content, slashed
+
+    # 3. Route refusals are answered directly rather than 307
+    r_missing = client.get(
+        "/drive/v3/files/nonexistent_file_id/", headers=admin_h, follow_redirects=False
+    )
+    assert r_missing.status_code == 404
+
+    r_bad_pagesize = client.get(
+        "/drive/v3/files/?pageSize=0", headers=admin_h, follow_redirects=False
+    )
+    assert r_bad_pagesize.status_code == 400
+
+    r_missing_mime = client.get(
+        f"/drive/v3/files/{doc}/export/", headers=admin_h, follow_redirects=False
+    )
+    assert r_missing_mime.status_code == 400
+
+    r_no_auth = client.get(f"/drive/v3/files/{doc}/", follow_redirects=False)
+    assert r_no_auth.status_code == 403
+
+    r_bad_auth = client.get(
+        "/drive/v3/files/", headers={"Authorization": "Bearer nope"}, follow_redirects=False
+    )
+    assert r_bad_auth.status_code == 401
+
+    # 4. Inside a Drive batch, a part with a trailing slash is 200, not 307
+    msg = MIMEMultipart("mixed")
+    setattr(msg, "_write_headers", lambda self: None)
+    part = MIMENonMultipart("application", "http")
+    part["Content-Transfer-Encoding"] = "binary"
+    part["Content-ID"] = "<item-1>"
+    part.set_payload("GET /drive/v3/files/?pageSize=1 HTTP/1.1\r\n\r\n")
+    msg.attach(part)
+    fp = StringIO()
+    Generator(fp, mangle_from_=False).flatten(msg, unixfrom=False)
+    body, boundary = fp.getvalue(), msg.get_boundary()
+
+    batch_r = client.post(
+        "/batch/drive/v3",
+        headers={**admin_h, "Content-Type": f'multipart/mixed; boundary="{boundary}"'},
+        content=body,
+    )
+    assert batch_r.status_code == 200
+    assert "HTTP/1.1 200" in batch_r.text
+    assert "307" not in batch_r.text

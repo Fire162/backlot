@@ -426,6 +426,27 @@ async def serve_a_slashed_notion_path_as_the_path_without_it(request: Request, c
 
 
 @app.middleware("http")
+async def serve_a_slashed_drive_path_as_the_path_without_it(request: Request, call_next):
+    """A trailing slash on a Drive path is not part of the path: real answers what the
+    slash-free spelling answers, for a run of slashes as well as one.
+
+    Measured against www.googleapis.com/drive/v3 on 2026-10-05: `/about/`, `/drives/`,
+    `/files/`, `/files/{id}/`, `/files/{id}/export/` and `/files/{id}/permissions/` each answer
+    their slash-free response (200, or the route's refusal on a bad parameter, a missing file or
+    a bad credential), as do `/files//` and `/files/{id}//`. Inside a Drive batch (`/batch/drive/v3`),
+    the part is the route's 200 rather than Starlette's 307 redirect.
+
+    The rewrite runs ahead of routing so Starlette's `redirect_slashes` does not emit a 307.
+    """
+    path = request.url.path
+    if path.startswith("/drive/v3/") and path.endswith("/"):
+        trimmed = path.rstrip("/")
+        request.scope["path"] = trimmed
+        request.scope["raw_path"] = trimmed.encode()
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def normalise_the_slashes_in_an_atlassian_path(request: Request, call_next):
     """Route an `/atlassian` path the way the real gateway does: runs of slashes are one, and a
     trailing slash is not part of the path.
