@@ -2641,6 +2641,109 @@ def test_drive_order_by_refuses_a_repeated_sort_key(client, admin_h, order_by, s
         }
 
 
+@pytest.mark.parametrize(
+    "order_by, status",
+    [
+        ("starred", 200),
+        ("starred desc", 200),
+        ("starred,name", 200),
+        ("starred desc,name", 200),
+        ("starred,name,folder", 200),
+        ("name,starred", 500),
+        ("name desc,starred desc", 500),
+        ("folder,starred,name", 500),
+        ("createdTime,starred", 500),
+        ("quotaBytesUsed,starred", 500),
+    ],
+)
+def test_drive_order_by_starred_after_key_500(client, admin_h, order_by, status):
+    """Real Drive (measured 2026-10-04) answers 500 Internal Error when starred appears after
+    another sort key in orderBy, while starred as the first key succeeds."""
+    r = client.get("/drive/v3/files", headers=admin_h, params={"pageSize": 1, "orderBy": order_by})
+    assert r.status_code == status, r.text
+    if status == 500:
+        assert _gerr(r) == {
+            "code": 500,
+            "message": "Internal Error",
+            "errors": [
+                {
+                    "message": "Internal Error",
+                    "domain": "global",
+                    "reason": "internalError",
+                }
+            ],
+        }
+
+
+def test_drive_order_by_starred_precedence(client, admin_h):
+    """Refusal precedence for orderBy with secondary starred, measured 2026-10-04: all of orderBy,
+    pageSize, q and pageToken are checked before the 500, but fields is not."""
+    # Repeated key 403 beats secondary starred 500
+    r = client.get(
+        "/drive/v3/files", headers=admin_h, params={"pageSize": 1, "orderBy": "name,name,starred"}
+    )
+    assert r.status_code == 403
+
+    # Unusable key 400 beats secondary starred 500
+    r = client.get(
+        "/drive/v3/files", headers=admin_h, params={"pageSize": 1, "orderBy": "name,bogus,starred"}
+    )
+    assert r.status_code == 400
+
+    # pageSize=0 400 beats secondary starred 500
+    r = client.get(
+        "/drive/v3/files", headers=admin_h, params={"pageSize": 0, "orderBy": "name,starred"}
+    )
+    assert r.status_code == 400
+
+    # bad q 400 beats secondary starred 500
+    r = client.get(
+        "/drive/v3/files",
+        headers=admin_h,
+        params={"pageSize": 1, "orderBy": "name,starred", "q": "name contains 'x' and ("},
+    )
+    assert r.status_code == 400
+
+    # bad pageToken 400 beats secondary starred 500
+    r = client.get(
+        "/drive/v3/files",
+        headers=admin_h,
+        params={"pageSize": 1, "orderBy": "name,starred", "pageToken": "zzz"},
+    )
+    assert r.status_code == 400
+
+    # fields=bogus does NOT beat secondary starred 500 (both answer 500)
+    r = client.get(
+        "/drive/v3/files",
+        headers=admin_h,
+        params={"pageSize": 1, "orderBy": "name,starred", "fields": "totallyBogusField"},
+    )
+    assert r.status_code == 500
+    assert r.json()["error"]["message"] == "Internal Error"
+
+    # blank fields does NOT beat secondary starred 500
+    r = client.get(
+        "/drive/v3/files",
+        headers=admin_h,
+        params={"pageSize": 1, "orderBy": "name,starred", "fields": ""},
+    )
+    assert r.status_code == 500
+    assert r.json()["error"]["message"] == "Internal Error"
+
+    # q that matches no file still answers 500
+    r = client.get(
+        "/drive/v3/files",
+        headers=admin_h,
+        params={
+            "pageSize": 1,
+            "orderBy": "name,starred",
+            "q": "name = 'nonexistent_file_definitely_not_here'",
+        },
+    )
+    assert r.status_code == 500
+    assert r.json()["error"]["message"] == "Internal Error"
+
+
 def test_drive_invalid_fields_mask_is_rejected(client, admin_h):
     """Accepting an unknown field name and yielding empty file objects (200 {}) lets a typo or a
     stale field name in a consumer's mask pass every Backlot-backed test and 400 in production."""
