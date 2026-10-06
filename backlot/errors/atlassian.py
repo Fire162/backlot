@@ -242,11 +242,13 @@ def cql_required() -> AtlassianError:
 
     Measured 2026-10-05: no `cql`, `?cql=` and a bare `?cql` are this 400, and so is
     `?CQL=type=page`, the name being case-sensitive. A repeated `cql` is read from its first value:
-    `?cql=&cql=type=page` is this 400 and `?cql=type=page&cql=` a 200. It comes ahead of the
-    negative `limit`/`start` refusal, so `?limit=-1` with no `cql` is this 400. The body carries the
-    `data` object :func:`start_too_large` describes. A whitespace-only `cql` (`%20`, `%09`) is not
-    this refusal: real answers it after the negative one with `Could not parse cql : `, its message
-    for a CQL it cannot parse, and this server does not check CQL syntax.
+    `?cql=&cql=type=page` is this 400 and `?cql=type=page&cql=` a 200. It comes after the 404 for a
+    `limit` or `start` real cannot convert (``backlot.routers.atlassian._cql_page_param``) and ahead
+    of the negative `limit`/`start` refusal: `?cql=&limit=abc` is that 404 (measured 2026-10-06) and
+    `?limit=-1` with no `cql` is this 400. The body carries the `data` object
+    :func:`start_too_large` describes. A whitespace-only `cql` (`%20`, `%09`) is not this refusal:
+    real answers it after the negative one with `Could not parse cql : `, its message for a CQL it
+    cannot parse, and this server does not check CQL syntax.
     """
     return AtlassianError(
         400,

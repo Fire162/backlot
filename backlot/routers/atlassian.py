@@ -1359,7 +1359,12 @@ async def confluence_cql_search(request: Request):
     conn = auth.conn(request)
     caller = _confluence_caller(request)
     ids = auth.visible_ids(request, caller)
-    # the first value, and ahead of the negative check below: see `errors_atlassian.cql_required`
+    # Not `_confluence_page_params`: see `_cql_page_param`.
+    limit = _cql_page_param(request, "limit", 25)
+    start = _cql_page_param(request, "start", 0)
+    if limit is None or start is None:
+        return Response(status_code=404)
+    # the first value, between the 404 and the negative check: see `errors_atlassian.cql_required`
     cqls = request.query_params.getlist("cql")
     if not cqls or not cqls[0]:
         raise errors_atlassian.cql_required()
@@ -1380,11 +1385,6 @@ async def confluence_cql_search(request: Request):
     want_type = mt.group(1) if mt else None
     ml = re.search(r'label\s*(?:=|in)\s*"?([^")\s]+)"?', cql)
     want_label = ml.group(1) if ml else None
-    # Not `_confluence_page_params`: see `_cql_page_param`.
-    limit = _cql_page_param(request, "limit", 25)
-    start = _cql_page_param(request, "start", 0)
-    if limit is None or start is None:
-        return Response(status_code=404)
     _refuse_negative_page_params(limit, start)
     # An empty `cursor` is none, and of a repeated one the first is read, measured 2026-10-04.
     sent_cursor = (request.query_params.getlist("cursor") or [None])[0]

@@ -633,13 +633,15 @@ _LIMIT_BELOW_ZERO = {
         ("limit=-1", 400, _CQL_REQUIRED),
         ("cql=type%3Dpage&limit=-1", 400, _LIMIT_BELOW_ZERO),
         ("cql=%20&limit=-1", 400, _LIMIT_BELOW_ZERO),
+        ("cql=&limit=abc", 404, None),
+        ("cql=&start=abc", 404, None),
     ],
 )
 def test_confluence_cql_search_refuses_a_request_with_no_first_cql(
     client, admin_h, query, status, body
 ):
-    """The requests :func:`backlot.errors.atlassian.cql_required` records, beside the ones that pass
-    it on to the negative refusal or to the search."""
+    """The requests :func:`backlot.errors.atlassian.cql_required` records, beside the 404 that comes
+    ahead of it and the requests that pass it on to the negative refusal or to the search."""
     r = client.get(f"/atlassian/wiki/rest/api/search?{query}", headers=admin_h)
     assert r.status_code == status, r.text
     if body is not None:
