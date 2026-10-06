@@ -2044,6 +2044,10 @@ async def drive_files_list(request: Request):
     order = _drive_order_specs(gerr.first_repeat(params, "orderBy"))
     q = gerr.first_repeat(params, "q") or ""
     query = _drive_q_parse(q)  # 400 on a clause Backlot cannot evaluate; None when there is no q
+    if order and query is not None and any(t.field == "fullText" for t in _drive_q_terms(query)):
+        # Real Drive (measured 2026-10-05, #473): queries with fullText terms cannot be sorted by orderBy.
+        # Refused ahead of pageToken and fields masks, after pageSize and orderBy syntax validation.
+        raise gerr.sorting_not_supported_fulltext()
     # Measured 2026-09-23: a token the API did not issue is 400 `Invalid Value`, where an empty one
     # is the first page.
     offset = decode_cursor_or_none(gerr.first_repeat(params, "pageToken"))
