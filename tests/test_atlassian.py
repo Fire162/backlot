@@ -598,7 +598,8 @@ def test_confluence_cql_search_refuses_a_request_with_no_first_cql(
 
 def test_confluence_cql_search_with_no_tilde_selects_by_its_clauses(tmp_path):
     """Pins what :func:`backlot.routers.atlassian.confluence_cql_search` says a CQL with no `~`
-    clause answers, for the admin and for a caller one page is hidden from.
+    clause answers, for the admin and for a caller one page is hidden from, and which value of a
+    repeated `cql` is searched.
 
     Not SAMPLE: it holds pages alone, so a `type` clause would select the same rows as no clause."""
     from backlot import synth
@@ -639,7 +640,8 @@ def test_confluence_cql_search_with_no_tilde_selects_by_its_clauses(tmp_path):
     )
     eng = synth.confluence_space_key("eng")
     rows = [
-        # cql, the titles the admin is served, the titles ava is served
+        # cql, the titles the admin is served, the titles ava is served. A list goes out as a
+        # repeated `cql`, read from its first value as `cql_required` records.
         ("type=page", {"Guide", "Shut"}, {"Guide"}),
         ("type=blogpost", {"Post"}, {"Post"}),
         (f"space={eng}", {"Guide", "Post"}, {"Guide", "Post"}),
@@ -647,6 +649,7 @@ def test_confluence_cql_search_with_no_tilde_selects_by_its_clauses(tmp_path):
         ("label=runbook", {"Guide"}, {"Guide"}),
         ("space=NOPE", set(), set()),
         ('title="Guide"', set(), set()),
+        (["type=page", f"space={eng}"], {"Guide", "Shut"}, {"Guide"}),
     ]
     with client_for(settings, reload=True) as c:
         written = yaml.safe_load(settings.tokens_path.read_text())
