@@ -1688,9 +1688,9 @@ _DRIVE_ORDER_UNMODELLED = ("viewedByMeTime", "modifiedByMeTime")
 
 def _drive_order_specs(order_by: str | None) -> list[tuple]:
     """Parse ``orderBy`` — comma-separated keys, each optionally suffixed ``desc`` — into
-    ``(key function, reverse)`` pairs. An unusable key is a 400, as on the real API — accepting one
-    and not applying it would let a client relying on server-side ordering pass here and misbehave
-    against the real thing. A key named twice is a 403."""
+    ``(key, reverse)`` pairs. An unusable key is a 400, as on the real API — accepting one and not
+    applying it would let a client relying on server-side ordering pass here and misbehave against
+    the real thing. A key named twice is a 403."""
     specs = []
     seen: set[str] = set()
     for tok in (order_by or "").split(","):
@@ -1700,13 +1700,7 @@ def _drive_order_specs(order_by: str | None) -> list[tuple]:
         key = parts[0]
         if len(parts) > 2 or (len(parts) == 2 and parts[1] != "desc"):
             raise gerr.invalid_value("orderBy", f"Invalid sort key: {tok.strip()}")
-        if key in _DRIVE_ORDER_UNMODELLED:
-            raise gerr.invalid_value(
-                "orderBy",
-                f"Sorting by '{key}' is not supported by Backlot (it models no per-caller "
-                f"view/share timestamps). Supported: {', '.join(sorted(_DRIVE_ORDER_KEYS))}.",
-            )
-        if key not in _DRIVE_ORDER_KEYS:
+        if key not in _DRIVE_ORDER_KEYS and key not in _DRIVE_ORDER_UNMODELLED:
             raise gerr.invalid_value("orderBy", f"Invalid sort key: {tok.strip()}")
         # Real Drive (measured 2026-10-04) 403s a key named twice whatever either direction is, and
         # reads `name_natural` as `name` but `recency` and `modifiedTime` as two keys — so this
@@ -1716,8 +1710,21 @@ def _drive_order_specs(order_by: str | None) -> list[tuple]:
         if name in seen:
             raise gerr.duplicate_sort_keys()
         seen.add(name)
-        specs.append((_DRIVE_ORDER_KEYS[key], len(parts) == 2))
+        specs.append((key, len(parts) == 2))
     return specs
+
+
+def _drive_order_keyfns(specs: list[tuple]) -> list[tuple]:
+    """``(key function, reverse)`` pairs for the keys ``_drive_order_specs`` passed. A key Backlot
+    cannot sort by is refused here, after the 403 a `fullText` term gets."""
+    for key, _ in specs:
+        if key in _DRIVE_ORDER_UNMODELLED:
+            raise gerr.invalid_value(
+                "orderBy",
+                f"Sorting by '{key}' is not supported by Backlot (it models no per-caller "
+                f"view/share timestamps). Supported: {', '.join(sorted(_DRIVE_ORDER_KEYS))}.",
+            )
+    return [(_DRIVE_ORDER_KEYS[key], reverse) for key, reverse in specs]
 
 
 def _drive_sort(files: list[dict], specs: list[tuple]) -> list[dict]:
@@ -2028,8 +2035,9 @@ async def drive_files_list(request: Request):
     me = caller.email
     # Each read off the first repeat, as real reads them -- see `gerr.first_repeat`. Refused in
     # real's order, measured 2026-09-23 by sending two bad values at once: `pageSize` first, then
-    # `orderBy`, `q`, `pageToken` and `fields`, whichever order the query names them in. The 403 for
-    # an `orderBy` naming a key twice comes at the same point, measured 2026-10-05.
+    # `orderBy`, `q`, the 403 for an `orderBy` on a query with a `fullText` term, `pageToken` and
+    # `fields`, whichever order the query names them in. The 403 for an `orderBy` naming a key twice
+    # comes at the same point as `orderBy`, measured 2026-10-05.
     params = request.query_params
     typed = _drive_typed(
         request,
@@ -2045,9 +2053,8 @@ async def drive_files_list(request: Request):
     q = gerr.first_repeat(params, "q") or ""
     query = _drive_q_parse(q)  # 400 on a clause Backlot cannot evaluate; None when there is no q
     if order and query is not None and any(t.field == "fullText" for t in _drive_q_terms(query)):
-        # Real Drive (measured 2026-10-05, #473): queries with fullText terms cannot be sorted by orderBy.
-        # Refused ahead of pageToken and fields masks, after pageSize and orderBy syntax validation.
         raise gerr.sorting_not_supported_fulltext()
+    order = _drive_order_keyfns(order)
     # Measured 2026-09-23: a token the API did not issue is 400 `Invalid Value`, where an empty one
     # is the first page.
     offset = decode_cursor_or_none(gerr.first_repeat(params, "pageToken"))

@@ -176,7 +176,7 @@ def duplicate_sort_keys() -> GoogleError:
 
 def sorting_not_supported_fulltext() -> GoogleError:
     """Drive's refusal of an ``orderBy`` on queries with fullText terms — a 403, measured against
-    Drive v3 on 2026-10-05 (#473). Results are always in descending relevance order."""
+    Drive v3 on 2026-10-05 and 2026-10-07."""
     return GoogleError(
         403,
         "Sorting is not supported for queries with fullText terms. Results are always in descending relevance order.",

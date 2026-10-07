@@ -302,8 +302,8 @@ the two deprecated team-drive ones) alike, and a Sheets data-filter body's value
 is looked up. On Drive's `files.list`, one `pageSize` outside 1-1000 is refused with the range
 sentence (1-100 on `permissions.list` and `drives.list`), while a repeated one is read from the
 first and never range-checked; a `pageToken` it did not issue is 400 `Invalid Value`; and the
-refusals come in the order `pageSize`, `orderBy`, `q`, `pageToken`, `fields`. A blank `fields` on
-`files.list` or `files.get` answers `{}`. `files.export` refuses a format the file's type does not
+refusals come in the order `pageSize`, `orderBy`, `q`, the 403 on an `orderBy` with a `fullText`
+term, `pageToken`, `fields`. A blank `fields` on `files.list` or `files.get` answers `{}`. `files.export` refuses a format the file's type does not
 export to, the empty `mimeType=` among them, with `The requested conversion is not supported.`,
 matching the format without regard to case, refuses an absent `mimeType` ahead of looking the file
 up, and serves an export under the `mimeType` exactly as sent, with no `charset`. Measured against

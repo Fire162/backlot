@@ -1073,6 +1073,46 @@ def test_drive_a_page_token_it_did_not_issue_is_refused(client, admin_h):
         ([("orderBy", "name,name"), ("q", "nosuchfield = 1")], 403, "orderBy"),
         ([("pageToken", "BOGUS"), ("orderBy", "name,name")], 403, "orderBy"),
         ([("fields", "bogus"), ("orderBy", "name,name")], 403, "orderBy"),
+        # fullText + orderBy precedence rows, measured 2026-10-05 and 2026-10-07
+        (
+            [("q", "fullText contains 'the'"), ("orderBy", "name"), ("pageSize", "0")],
+            400,
+            "page_size",
+        ),
+        (
+            [("q", "fullText contains 'the'"), ("orderBy", "name"), ("pageSize", "NOPE")],
+            400,
+            None,
+        ),
+        ([("q", "fullText contains 'the'"), ("orderBy", "bogus")], 400, "orderBy"),
+        ([("q", "fullText contains 'the' and nosuchfield = 1"), ("orderBy", "name")], 400, "q"),
+        (
+            [("q", "fullText contains 'the' and nosuchfield = 1"), ("orderBy", "viewedByMeTime")],
+            400,
+            "q",
+        ),
+        (
+            [("q", "fullText contains 'the'"), ("orderBy", "name"), ("pageToken", "BOGUS")],
+            403,
+            "orderBy",
+        ),
+        (
+            [("pageToken", "BOGUS"), ("q", "fullText contains 'the'"), ("orderBy", "name")],
+            403,
+            "orderBy",
+        ),
+        (
+            [("q", "fullText contains 'the'"), ("orderBy", "name"), ("fields", "bogus")],
+            403,
+            "orderBy",
+        ),
+        (
+            [("fields", "bogus"), ("q", "fullText contains 'the'"), ("orderBy", "name")],
+            403,
+            "orderBy",
+        ),
+        ([("q", "fullText contains 'the'"), ("orderBy", "name"), ("fields", "")], 403, "orderBy"),
+        ([("fields", ""), ("q", "fullText contains 'the'"), ("orderBy", "name")], 403, "orderBy"),
     ],
 )
 def test_drive_files_list_refuses_in_reals_order(client, admin_h, query, code, location):
@@ -2641,83 +2681,65 @@ def test_drive_order_by_refuses_a_repeated_sort_key(client, admin_h, order_by, s
         }
 
 
+_FULLTEXT_403 = (
+    "forbidden",
+    "Sorting is not supported for queries with fullText terms. Results are always in descending relevance order.",
+)
+_DUPLICATE_403 = (
+    "orderByContainsDuplicateSortKeys",
+    "The orderBy parameter cannot contain duplicate sort keys.",
+)
+
+
 @pytest.mark.parametrize(
-    "q, order_by, status",
+    "q, order_by, status, reason, message",
     [
-        ("fullText contains 'the'", "name", 403),
-        ("fullText contains 'the'", "name desc", 403),
-        ("fullText contains 'the'", "name,modifiedTime", 403),
-        ("fullText contains 'zzqqxx'", "name", 403),
-        ("fullText contains 'zzqqxx'", "", 200),
-        ("fullText contains 'zzqqxx' and trashed = false", "name", 403),
-        ("fullText contains 'zzqqxx' or name contains 'zzqqxx'", "name", 403),
-        ("not fullText contains 'the'", "name", 403),
-        ("(fullText contains 'the')", "name", 403),
-        ("name contains 'the'", "name", 200),
-        ("name contains 'fullText'", "name", 200),
+        ("fullText contains 'the'", "name", 403, *_FULLTEXT_403),
+        ("fullText contains 'the'", "name desc", 403, *_FULLTEXT_403),
+        ("fullText contains 'the'", "name,modifiedTime", 403, *_FULLTEXT_403),
+        ("fullText contains 'the'", "name,starred", 403, *_FULLTEXT_403),
+        ("fullText contains 'the'", "name,viewedByMeTime", 403, *_FULLTEXT_403),
+        ("fullText contains 'the'", "viewedByMeTime", 403, *_FULLTEXT_403),
+        ("fullText contains 'the'", "viewedByMeTime desc", 403, *_FULLTEXT_403),
+        ("fullText contains 'the'", "modifiedByMeTime", 403, *_FULLTEXT_403),
+        ("fullText contains 'the'", "name,name", 403, *_DUPLICATE_403),
+        ("fullText contains 'the'", "viewedByMeTime,viewedByMeTime", 403, *_DUPLICATE_403),
+        ("fullText contains 'zzqqxx'", "name", 403, *_FULLTEXT_403),
+        ("fullText contains 'zzqqxx'", None, 200, None, None),
+        ("fullText contains 'zzqqxx'", "", 200, None, None),
+        ("fullText contains 'zzqqxx' and trashed = false", "name", 403, *_FULLTEXT_403),
+        ("fullText contains 'zzqqxx' or name contains 'zzqqxx'", "name", 403, *_FULLTEXT_403),
+        ("not fullText contains 'the'", "name", 403, *_FULLTEXT_403),
+        ("(fullText contains 'the')", "name", 403, *_FULLTEXT_403),
+        ("name contains 'the'", "name", 200, None, None),
+        ("name contains 'fullText'", "name", 200, None, None),
     ],
 )
-def test_drive_order_by_refuses_queries_with_fulltext_terms(client, admin_h, q, order_by, status):
-    """Measured against Drive v3 on 2026-10-05 (#473): queries with fullText terms cannot be sorted
-    by orderBy. Returns 403 with 'Sorting is not supported for queries with fullText terms...'."""
+def test_drive_order_by_refuses_queries_with_fulltext_terms(
+    client, admin_h, q, order_by, status, reason, message
+):
+    """The 403 `sorting_not_supported_fulltext` describes, plus the duplicate-key 403 where a
+    fullText query names one key twice; absent or empty `orderBy`, and queries without fullText
+    terms, answer 200."""
     params = {"q": q}
-    if order_by:
+    if order_by is not None:
         params["orderBy"] = order_by
     r = client.get("/drive/v3/files", headers=admin_h, params=params)
     assert r.status_code == status, r.text
     if status == 403:
-        msg = "Sorting is not supported for queries with fullText terms. Results are always in descending relevance order."
         assert _gerr(r) == {
             "code": 403,
-            "message": msg,
+            "message": message,
             "errors": [
                 {
-                    "message": msg,
+                    "message": message,
                     "domain": "global",
-                    "reason": "forbidden",
+                    "reason": reason,
                     "location": "orderBy",
                     "locationType": "parameter",
                 }
             ],
         }
-
-
-@pytest.mark.parametrize(
-    "query, code, location",
-    [
-        # pageSize invalid precedes the fullText 403
-        (
-            [("q", "fullText contains 'the'"), ("orderBy", "name"), ("pageSize", "0")],
-            400,
-            "page_size",
-        ),
-        ([("q", "fullText contains 'the'"), ("orderBy", "name"), ("pageSize", "abc")], 400, None),
-        # unparseable orderBy key precedes the fullText 403
-        ([("q", "fullText contains 'the'"), ("orderBy", "bogus")], 400, "orderBy"),
-        # bad q term precedes the fullText 403
-        ([("q", "fullText contains 'the' and nosuchfield = 1"), ("orderBy", "name")], 400, "q"),
-        # pageToken and fields checks come AFTER the fullText 403
-        (
-            [("q", "fullText contains 'the'"), ("orderBy", "name"), ("pageToken", "BOGUS")],
-            403,
-            "orderBy",
-        ),
-        (
-            [("q", "fullText contains 'the'"), ("orderBy", "name"), ("fields", "bogus")],
-            403,
-            "orderBy",
-        ),
-        ([("q", "fullText contains 'the'"), ("orderBy", "name"), ("fields", "")], 403, "orderBy"),
-    ],
-)
-def test_drive_fulltext_order_by_precedence(client, admin_h, query, code, location):
-    """Measured 2026-10-05 (#473): order of refusal when fullText queries are combined with orderBy."""
-    e = _gerr(client.get("/drive/v3/files", headers=admin_h, params=query))
-    assert e["code"] == code
-    if location is not None:
-        assert e["errors"][0].get("location") == location
-    else:
-        assert "location" not in e["errors"][0]
 
 
 def test_drive_invalid_fields_mask_is_rejected(client, admin_h):
