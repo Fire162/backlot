@@ -219,6 +219,52 @@ def _missing_argument(request: Request, *names: str) -> JSONResponse | None:
     return None
 
 
+def post_charset_warning(content_type: str | None) -> str | None:
+    """The warning real Slack draws for a POST's Content-Type charset parameter.
+
+    Real Slack adds `warning` and `response_metadata.warnings` to any POST whose Content-Type
+    gets the charset parameter wrong for its media type: `missing_charset` for `application/json`
+    that names no charset, and `superfluous_charset` for a form (`application/x-www-form-urlencoded`
+    or `multipart/form-data`) that names one. A POST with no Content-Type, a GET, and correct charsets
+    draw no warning. Measured against slack.com/api on 2026-10-07.
+    """
+    if not content_type:
+        return None
+    parts = [p.strip() for p in content_type.split(";")]
+    media_type = parts[0].lower()
+    has_charset = False
+    for p in parts[1:]:
+        if "=" in p:
+            k, _ = p.split("=", 1)
+            if k.strip().lower() == "charset":
+                has_charset = True
+                break
+    if media_type == "application/json":
+        return None if has_charset else "missing_charset"
+    if media_type in ("application/x-www-form-urlencoded", "multipart/form-data"):
+        return "superfluous_charset" if has_charset else None
+    return None
+
+
+def attach_warning(payload: dict, warning: str) -> dict:
+    """Attach Slack's warning and response_metadata.warnings to a response payload.
+
+    On auth.test, api.test and conversations.history, warning comes after the method's own keys
+    and response_metadata after warning. On an answer that already has response_metadata.messages,
+    warnings follows messages in the same object.
+    """
+    meta = payload.pop("response_metadata", None)
+    payload["warning"] = warning
+    if meta is not None:
+        warnings = meta.setdefault("warnings", [])
+        if warning not in warnings:
+            warnings.append(warning)
+        payload["response_metadata"] = meta
+    else:
+        payload["response_metadata"] = {"warnings": [warning]}
+    return payload
+
+
 # `sort_dir` is an enum on search.messages, search.all and search.files, matched as sent: measured
 # on 2026-10-03 and 2026-10-05, `ASC` and `bogus` answer this on all three and `Desc`, ` asc` and
 # `asc ` on search.messages, while `asc` and `desc` are served. An empty `sort_dir` is served on

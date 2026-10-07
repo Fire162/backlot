@@ -580,7 +580,9 @@ A channel the caller cannot see is refused by id as well as hidden from the list
 `conversations.info`, `.members`, `.history` and `.replies` all answer `channel_not_found`, the same
 answer an id that names nothing gets, so a private room's name, purpose and membership are not
 readable from its id alone. A required argument that was never sent is `invalid_arguments` rather
-than a `not_found` for something the caller never named.
+than a `not_found` for something the caller never named. A POST with `Content-Type: application/json`
+that names no charset draws `warning: missing_charset`, and a form (`application/x-www-form-urlencoded`
+or `multipart/form-data`) that names one draws `warning: superfluous_charset`, matching real Slack.
 
 ## Backlot's own endpoints
 

@@ -1828,3 +1828,122 @@ def test_slack_deactivation_changes_every_slack_answer_about_a_member_and_nothin
         assert store.slack_channel_has_author(conn, "incidents", "bo@acme.com") is True
     finally:
         conn.close()
+
+
+# Measured against slack.com/api on 2026-10-07:
+# Real Slack adds a warning to a POST whose Content-Type gets the charset parameter wrong
+# for its media type: missing_charset for application/json without one, superfluous_charset
+# for a form (application/x-www-form-urlencoded or multipart/form-data) that names one.
+# GETs, POSTs without Content-Type, and correct charsets draw no warning.
+@pytest.mark.parametrize(
+    "method, path, content_type, want_warning",
+    [
+        ("POST", "/slack/api/auth.test", "application/json", "missing_charset"),
+        ("POST", "/slack/api/auth.test", "application/json; charset=utf-8", None),
+        ("POST", "/slack/api/auth.test", "application/json;charset=UTF-8", None),
+        ("POST", "/slack/api/auth.test", "application/json; charset=iso-8859-1", None),
+        ("POST", "/slack/api/auth.test", "application/x-www-form-urlencoded", None),
+        (
+            "POST",
+            "/slack/api/auth.test",
+            "application/x-www-form-urlencoded; charset=utf-8",
+            "superfluous_charset",
+        ),
+        (
+            "POST",
+            "/slack/api/auth.test",
+            "application/x-www-form-urlencoded;charset=UTF-8",
+            "superfluous_charset",
+        ),
+        (
+            "POST",
+            "/slack/api/auth.test",
+            "application/x-www-form-urlencoded; charset=iso-8859-1",
+            "superfluous_charset",
+        ),
+        (
+            "POST",
+            "/slack/api/auth.test",
+            "multipart/form-data; boundary=bound; charset=utf-8",
+            "superfluous_charset",
+        ),
+        ("POST", "/slack/api/auth.test", "multipart/form-data; boundary=bound", None),
+        ("POST", "/slack/api/auth.test", None, None),
+        ("GET", "/slack/api/auth.test", "application/json", None),
+        ("GET", "/slack/api/auth.test", "application/x-www-form-urlencoded; charset=utf-8", None),
+        ("POST", "/slack/api/api.test", "application/json", "missing_charset"),
+        (
+            "POST",
+            "/slack/api/api.test",
+            "application/x-www-form-urlencoded; charset=utf-8",
+            "superfluous_charset",
+        ),
+        ("POST", "/slack/api/conversations.history", "application/json", "missing_charset"),
+        (
+            "POST",
+            "/slack/api/conversations.history",
+            "application/x-www-form-urlencoded; charset=utf-8",
+            "superfluous_charset",
+        ),
+    ],
+)
+def test_slack_post_charset_warnings(client, admin_h, method, path, content_type, want_warning):
+    headers = dict(admin_h)
+    if content_type is not None:
+        headers["content-type"] = content_type
+    if method == "POST":
+        r = client.post(path, headers=headers, content=b"{}")
+    else:
+        r = client.get(path, headers=headers)
+    j = r.json()
+    if want_warning is None:
+        assert "warning" not in j
+        assert "warnings" not in j.get("response_metadata", {})
+    else:
+        assert j.get("warning") == want_warning
+        assert j.get("response_metadata", {}).get("warnings") == [want_warning]
+
+
+def test_slack_post_charset_warning_preserves_messages_and_order(client, admin_h):
+    headers = dict(admin_h)
+    headers["content-type"] = "application/json"
+    r = client.post("/slack/api/conversations.history", headers=headers, content=b"{}")
+    j = r.json()
+    assert j["ok"] is False
+    assert j["error"] == "invalid_arguments"
+    assert j["warning"] == "missing_charset"
+    assert j["response_metadata"] == {
+        "messages": ["[ERROR] missing required field: channel"],
+        "warnings": ["missing_charset"],
+    }
+    assert list(j.keys()) == ["ok", "error", "warning", "response_metadata"]
+    assert list(j["response_metadata"].keys()) == ["messages", "warnings"]
+
+
+def test_slack_post_charset_warning_on_auth_failures(client):
+    r_no_auth = client.post(
+        "/slack/api/auth.test",
+        headers={"content-type": "application/json"},
+        content=b"{}",
+    )
+    assert r_no_auth.json() == {
+        "ok": False,
+        "error": "not_authed",
+        "warning": "missing_charset",
+        "response_metadata": {"warnings": ["missing_charset"]},
+    }
+
+    r_bad_auth = client.post(
+        "/slack/api/auth.test",
+        headers={
+            "authorization": "Bearer bad-token",
+            "content-type": "application/x-www-form-urlencoded; charset=utf-8",
+        },
+        content=b"",
+    )
+    assert r_bad_auth.json() == {
+        "ok": False,
+        "error": "invalid_auth",
+        "warning": "superfluous_charset",
+        "response_metadata": {"warnings": ["superfluous_charset"]},
+    }

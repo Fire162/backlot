@@ -644,6 +644,59 @@ async def parse_slack_form(request: Request, call_next):
 
 
 @app.middleware("http")
+async def warn_slack_post_charset(request: Request, call_next):
+    """Warn on a Slack POST whose Content-Type has a missing or superfluous charset parameter.
+
+    Real Slack adds `warning` and `response_metadata.warnings` to any POST whose Content-Type
+    gets the charset parameter wrong for its media type: `missing_charset` for `application/json`
+    that names no charset, and `superfluous_charset` for a form (`application/x-www-form-urlencoded`
+    or `multipart/form-data`) that names one. Measured against slack.com/api on 2026-10-07 across
+    all twelve methods Backlot serves.
+    """
+    if not (request.url.path.startswith("/slack/") and request.method == "POST"):
+        return await call_next(request)
+
+    warning = slack.post_charset_warning(request.headers.get("content-type"))
+    response = await call_next(request)
+    if warning is None or response.status_code != 200:
+        return response
+
+    ctype = response.headers.get("content-type", "")
+    if not ctype.startswith("application/json"):
+        return response
+
+    body_bytes = b"".join([chunk async for chunk in response.body_iterator])
+    try:
+        data = json.loads(body_bytes)
+    except Exception:
+        return Response(
+            content=body_bytes,
+            status_code=response.status_code,
+            headers=response.headers,
+            media_type=response.media_type,
+        )
+
+    if not isinstance(data, dict):
+        return Response(
+            content=body_bytes,
+            status_code=response.status_code,
+            headers=response.headers,
+            media_type=response.media_type,
+        )
+
+    slack.attach_warning(data, warning)
+    new_bytes = json.dumps(data).encode("utf-8")
+    headers = dict(response.headers)
+    headers["content-length"] = str(len(new_bytes))
+    return Response(
+        content=new_bytes,
+        status_code=response.status_code,
+        headers=headers,
+        media_type=response.media_type,
+    )
+
+
+@app.middleware("http")
 async def vendor_json_media_type(request: Request, call_next):
     """Put the vendor's own `content-type` on a JSON body, where one is measured.
 
