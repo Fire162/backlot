@@ -1058,21 +1058,6 @@ def test_drive_a_page_token_it_did_not_issue_is_refused(client, admin_h):
 @pytest.mark.parametrize(
     "query, code, location",
     [
-        ([("pageToken", "BOGUS"), ("pageSize", "NOPE")], 400, None),
-        ([("fields", "bogus"), ("pageSize", "0")], 400, "page_size"),
-        ([("fields", "bogus"), ("pageToken", "BOGUS")], 400, "pageToken"),
-        ([("pageToken", "BOGUS"), ("fields", "bogus")], 400, "pageToken"),
-        ([("pageToken", "BOGUS"), ("q", "nosuchfield = 1")], 400, "q"),
-        ([("fields", "bogus"), ("q", "nosuchfield = 1")], 400, "q"),
-        ([("q", "nosuchfield = 1"), ("orderBy", "bogus")], 400, "orderBy"),
-        ([("orderBy", "bogus"), ("q", "nosuchfield = 1")], 400, "orderBy"),
-        ([("fields", "bogus"), ("orderBy", "bogus")], 400, "orderBy"),
-        ([("orderBy", "name,name"), ("pageSize", "0")], 400, "page_size"),
-        ([("orderBy", "name,name"), ("pageSize", "NOPE")], 400, None),
-        ([("q", "nosuchfield = 1"), ("orderBy", "name,name")], 403, "orderBy"),
-        ([("orderBy", "name,name"), ("q", "nosuchfield = 1")], 403, "orderBy"),
-        ([("pageToken", "BOGUS"), ("orderBy", "name,name")], 403, "orderBy"),
-        ([("fields", "bogus"), ("orderBy", "name,name")], 403, "orderBy"),
         # fullText + orderBy precedence rows, measured 2026-10-05 and 2026-10-07
         (
             [("q", "fullText contains 'the'"), ("orderBy", "name"), ("pageSize", "0")],
@@ -1113,6 +1098,21 @@ def test_drive_a_page_token_it_did_not_issue_is_refused(client, admin_h):
         ),
         ([("q", "fullText contains 'the'"), ("orderBy", "name"), ("fields", "")], 403, "orderBy"),
         ([("fields", ""), ("q", "fullText contains 'the'"), ("orderBy", "name")], 403, "orderBy"),
+        ([("pageToken", "BOGUS"), ("pageSize", "NOPE")], 400, None),
+        ([("fields", "bogus"), ("pageSize", "0")], 400, "page_size"),
+        ([("fields", "bogus"), ("pageToken", "BOGUS")], 400, "pageToken"),
+        ([("pageToken", "BOGUS"), ("fields", "bogus")], 400, "pageToken"),
+        ([("pageToken", "BOGUS"), ("q", "nosuchfield = 1")], 400, "q"),
+        ([("fields", "bogus"), ("q", "nosuchfield = 1")], 400, "q"),
+        ([("q", "nosuchfield = 1"), ("orderBy", "bogus")], 400, "orderBy"),
+        ([("orderBy", "bogus"), ("q", "nosuchfield = 1")], 400, "orderBy"),
+        ([("fields", "bogus"), ("orderBy", "bogus")], 400, "orderBy"),
+        ([("orderBy", "name,name"), ("pageSize", "0")], 400, "page_size"),
+        ([("orderBy", "name,name"), ("pageSize", "NOPE")], 400, None),
+        ([("q", "nosuchfield = 1"), ("orderBy", "name,name")], 403, "orderBy"),
+        ([("orderBy", "name,name"), ("q", "nosuchfield = 1")], 403, "orderBy"),
+        ([("pageToken", "BOGUS"), ("orderBy", "name,name")], 403, "orderBy"),
+        ([("fields", "bogus"), ("orderBy", "name,name")], 403, "orderBy"),
     ],
 )
 def test_drive_files_list_refuses_in_reals_order(client, admin_h, query, code, location):
