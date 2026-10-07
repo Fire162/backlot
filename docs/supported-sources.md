@@ -304,8 +304,9 @@ the two deprecated team-drive ones) alike, and a Sheets data-filter body's value
 looked up. On Drive's `files.list`, one `pageSize` outside 1-1000 is refused with the range sentence
 (1-100 on `permissions.list` and `drives.list`), while a repeated one is read from the first and
 never range-checked; a `pageToken` it did not issue is 400 `Invalid Value`; and the refusals come in
-the order `pageSize`, `orderBy`, `q`, `pageToken`, `fields`. `permissions.list` and `drives.list`
-issue no `nextPageToken` and refuse every non-empty `pageToken` with that 400, and
+the order `pageSize`, `orderBy`, `q`, `pageToken`, `fields`, an `orderBy` naming `starred` after
+another key being real's 500 `Internal Error` between `pageToken` and `fields`. `permissions.list`
+and `drives.list` issue no `nextPageToken` and refuse every non-empty `pageToken` with that 400, and
 `permissions.list` an empty one with 403 `pageTokenExpired`, after the typed and range refusals and
 ahead of the `useDomainAdminAccess=true` refusal and `permissions.list`'s file lookup. A blank
 `fields` on `files.list` or `files.get` answers `{}`. `files.export` refuses a format the file's
@@ -313,8 +314,8 @@ type does not export to, the empty `mimeType=` among them, with
 `The requested conversion is not supported.`, matching the format without regard to case, refuses an
 absent `mimeType` ahead of looking the file up, and serves an export under the `mimeType` exactly as
 sent, with no `charset`. Measured against the live Drive and Sheets APIs on 2026-09-23, the
-`pageToken` of `permissions.list` and `drives.list` on 2026-10-04, 2026-10-05 and 2026-10-07, and
-the export's `Content-Type` on 2026-09-30.
+`starred` 500 on 2026-10-04 and 2026-10-07, the `pageToken` of `permissions.list` and `drives.list`
+on 2026-10-04, 2026-10-05 and 2026-10-07, and the export's `Content-Type` on 2026-09-30.
 
 **Four Drive flags spelled `true`, in any case, run a check of their own**, where `1`, `t` and `yes`
 parse as true and run none. `includeItemsFromAllDrives` or `includeTeamDriveItems` on `files.list`

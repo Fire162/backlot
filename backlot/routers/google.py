@@ -2108,8 +2108,9 @@ async def drive_files_list(request: Request):
     # Each read off the first repeat, as real reads them -- see `gerr.first_repeat`. Refused in
     # real's order, measured 2026-09-23 by sending two bad values at once: `pageSize` first, then
     # `orderBy`, `q`, `pageToken` and `fields`, whichever order the query names them in. The 403 for
-    # an `orderBy` naming a key twice comes at the same point, measured 2026-10-05, and the
-    # shared-drive 403 between `orderBy` and `q`, measured 2026-10-04.
+    # an `orderBy` naming a key twice comes at the same point, measured 2026-10-05, the shared-drive
+    # 403 between `orderBy` and `q`, measured 2026-10-04, and the 500 for `starred` after another
+    # key between `pageToken` and `fields`, measured 2026-10-04 and 2026-10-07.
     params = request.query_params
     typed = _drive_typed(
         request,
