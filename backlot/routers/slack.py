@@ -201,8 +201,9 @@ def _missing_argument(request: Request, *names: str) -> JSONResponse | None:
     along with the order — a bad token is `invalid_auth` whether or not the arguments are there,
     so this sits after `_caller_or_error` rather than before it.
 
-    Measured on 2026-10-05 (#480): real Slack includes `response_metadata.messages` with one
-    `[ERROR] missing required field: <field>` message per missing argument in the order checked.
+    Measured on 2026-10-05 and 2026-10-07: real adds `response_metadata.messages`, one
+    `[ERROR] missing required field: <name>` per argument not sent, in the order `names` lists them
+    (`channel` before `ts` on conversations.replies).
     """
     missing = [n for n in names if _param(request, n) is None]
     if missing:
