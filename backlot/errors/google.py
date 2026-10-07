@@ -276,8 +276,9 @@ def internal_error() -> GoogleError:
 
 
 def drive_internal_error() -> GoogleError:
-    """Drive's 500 Internal Error, measured against Drive v3 on 2026-10-04: an orderBy specifying
-    starred after another sort key."""
+    """Drive's 500 `Internal Error`, which `files.list` answers to an ``orderBy`` naming ``starred``
+    after another key, in any place but the first and in either direction; ``starred`` first is
+    served. Measured against Drive v3 on 2026-10-04 and 2026-10-07."""
     return GoogleError(500, "Internal Error", reason="internalError")
 
 

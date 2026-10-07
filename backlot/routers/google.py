@@ -1686,15 +1686,13 @@ _DRIVE_ORDER_KEYS = {
 _DRIVE_ORDER_UNMODELLED = ("viewedByMeTime", "modifiedByMeTime")
 
 
-def _drive_order_specs(order_by: str | None) -> tuple[list[tuple], bool]:
+def _drive_order_specs(order_by: str | None) -> list[tuple]:
     """Parse ``orderBy`` — comma-separated keys, each optionally suffixed ``desc`` — into
-    ``(key function, reverse)`` pairs and a flag indicating whether ``starred`` appeared after
-    another sort key. An unusable key is a 400, as on the real API — accepting one and not applying
-    it would let a client relying on server-side ordering pass here and misbehave against the real
-    thing. A key named twice is a 403."""
+    ``(key function, reverse)`` pairs. An unusable key is a 400, as on the real API — accepting one
+    and not applying it would let a client relying on server-side ordering pass here and misbehave
+    against the real thing. A key named twice is a 403."""
     specs = []
     seen: set[str] = set()
-    starred_after_key = False
     for tok in (order_by or "").split(","):
         parts = tok.split()
         if not parts:
@@ -1717,11 +1715,9 @@ def _drive_order_specs(order_by: str | None) -> tuple[list[tuple], bool]:
         name = "name" if key == "name_natural" else key
         if name in seen:
             raise gerr.duplicate_sort_keys()
-        if key == "starred" and len(seen) > 0:
-            starred_after_key = True
         seen.add(name)
         specs.append((_DRIVE_ORDER_KEYS[key], len(parts) == 2))
-    return specs, starred_after_key
+    return specs
 
 
 def _drive_sort(files: list[dict], specs: list[tuple]) -> list[dict]:
@@ -1732,6 +1728,14 @@ def _drive_sort(files: list[dict], specs: list[tuple]) -> list[dict]:
     for keyfn, reverse in reversed(specs):
         files.sort(key=keyfn, reverse=reverse)
     return files
+
+
+def _drive_starred_after_another_key(order_by: str | None) -> bool:
+    """Whether ``starred`` follows another key in an ``orderBy`` that ``_drive_order_specs`` passed,
+    the case `gerr.drive_internal_error` answers. An empty token is no key: `,starred` is served and
+    `name,,starred` is the 500."""
+    keys = [parts[0] for tok in (order_by or "").split(",") if (parts := tok.split())]
+    return "starred" in keys[1:]
 
 
 def _drive_q_plain_folder(query) -> bool:
@@ -2045,7 +2049,7 @@ async def drive_files_list(request: Request):
     )
     limit = _drive_page_size(typed["pageSize"])
     # 400 on an unusable key, 403 on a key named twice
-    order, starred_after_key = _drive_order_specs(gerr.first_repeat(params, "orderBy"))
+    order = _drive_order_specs(gerr.first_repeat(params, "orderBy"))
     q = gerr.first_repeat(params, "q") or ""
     query = _drive_q_parse(q)  # 400 on a clause Backlot cannot evaluate; None when there is no q
     # Measured 2026-09-23: a token the API did not issue is 400 `Invalid Value`, where an empty one
@@ -2053,10 +2057,7 @@ async def drive_files_list(request: Request):
     offset = decode_cursor_or_none(gerr.first_repeat(params, "pageToken"))
     if offset is None:
         raise gerr.invalid_value("pageToken")
-    # Real Drive (measured 2026-10-04) answers 500 Internal Error when `starred` appears after another
-    # sort key in `orderBy`. All of `orderBy`, `pageSize`, `q` and `pageToken` are refused ahead of it,
-    # but `fields` is not: `fields=bogus` and a blank `fields` both 500 when `starred` is secondary.
-    if starred_after_key:
+    if _drive_starred_after_another_key(gerr.first_repeat(params, "orderBy")):
         raise gerr.drive_internal_error()
     mask = gerr.first_repeat(params, "fields")
     if mask is not None and not mask.strip():
