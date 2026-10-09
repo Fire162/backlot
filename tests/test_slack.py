@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 import yaml
+from fastapi.responses import JSONResponse
 
 from backlot import store, synth
 from backlot.routers import slack
@@ -1835,73 +1836,64 @@ def test_slack_deactivation_changes_every_slack_answer_about_a_member_and_nothin
 # for its media type: missing_charset for application/json without one, superfluous_charset
 # for a form (application/x-www-form-urlencoded or multipart/form-data) that names one.
 # GETs, POSTs without Content-Type, and correct charsets draw no warning.
+_FORM = "application/x-www-form-urlencoded"
+_MULTIPART = "multipart/form-data; boundary=b"
+_ONE_PART = b'--b\r\nContent-Disposition: form-data; name="x"\r\n\r\ny\r\n--b--\r\n'
+
+
 @pytest.mark.parametrize(
-    "method, path, content_type, want_warning",
+    "verb, method, content_type, body, want_warning",
     [
-        ("POST", "/slack/api/auth.test", "application/json", "missing_charset"),
-        ("POST", "/slack/api/auth.test", "application/json; charset=utf-8", None),
-        ("POST", "/slack/api/auth.test", "application/json;charset=UTF-8", None),
-        ("POST", "/slack/api/auth.test", "application/json; charset=iso-8859-1", None),
-        ("POST", "/slack/api/auth.test", "application/x-www-form-urlencoded", None),
-        (
-            "POST",
-            "/slack/api/auth.test",
-            "application/x-www-form-urlencoded; charset=utf-8",
-            "superfluous_charset",
-        ),
-        (
-            "POST",
-            "/slack/api/auth.test",
-            "application/x-www-form-urlencoded;charset=UTF-8",
-            "superfluous_charset",
-        ),
-        (
-            "POST",
-            "/slack/api/auth.test",
-            "application/x-www-form-urlencoded; charset=iso-8859-1",
-            "superfluous_charset",
-        ),
-        (
-            "POST",
-            "/slack/api/auth.test",
-            "multipart/form-data; boundary=bound; charset=utf-8",
-            "superfluous_charset",
-        ),
-        ("POST", "/slack/api/auth.test", "multipart/form-data; boundary=bound", None),
-        ("POST", "/slack/api/auth.test", None, None),
-        ("GET", "/slack/api/auth.test", "application/json", None),
-        ("GET", "/slack/api/auth.test", "application/x-www-form-urlencoded; charset=utf-8", None),
-        ("POST", "/slack/api/api.test", "application/json", "missing_charset"),
-        (
-            "POST",
-            "/slack/api/api.test",
-            "application/x-www-form-urlencoded; charset=utf-8",
-            "superfluous_charset",
-        ),
-        ("POST", "/slack/api/conversations.history", "application/json", "missing_charset"),
-        (
-            "POST",
-            "/slack/api/conversations.history",
-            "application/x-www-form-urlencoded; charset=utf-8",
-            "superfluous_charset",
-        ),
+        ("POST", "auth.test", "application/json", b"{}", "missing_charset"),
+        ("POST", "auth.test", "application/json; charset=", b"{}", "missing_charset"),
+        ("POST", "auth.test", 'application/json; charset=""', b"{}", "missing_charset"),
+        ("POST", "auth.test", "application/json; CHARSET=utf-8", b"{}", "missing_charset"),
+        ("POST", "auth.test", "application/json; charset =utf-8", b"{}", "missing_charset"),
+        ("POST", "auth.test", "application/json; charset= utf-8", b"{}", "missing_charset"),
+        ("POST", "auth.test", "application/json; charset=utf-8", b"{}", None),
+        ("POST", "auth.test", "application/json;charset=UTF-8", b"{}", None),
+        ("POST", "auth.test", "application/json; charset=iso-8859-1", b"{}", None),
+        ("POST", "auth.test", 'application/json; charset="utf-8"', b"{}", None),
+        ("POST", "auth.test", "APPLICATION/JSON", b"{}", None),
+        ("POST", "auth.test", _FORM, b"", None),
+        ("POST", "auth.test", f"{_FORM}; charset=utf-8", b"", "superfluous_charset"),
+        ("POST", "auth.test", f"{_FORM};charset=UTF-8", b"", "superfluous_charset"),
+        ("POST", "auth.test", f"{_FORM}; charset=iso-8859-1", b"", "superfluous_charset"),
+        ("POST", "auth.test", f'{_FORM}; charset="utf-8"', b"", "superfluous_charset"),
+        ("POST", "auth.test", f"{_FORM}; charset=", b"", None),
+        ("POST", "auth.test", f"{_FORM}; CHARSET=utf-8", b"", None),
+        ("POST", "auth.test", f"{_FORM.upper()}; charset=utf-8", b"", None),
+        ("POST", "auth.test", f"{_MULTIPART}; charset=utf-8", _ONE_PART, "superfluous_charset"),
+        ("POST", "auth.test", _MULTIPART, _ONE_PART, None),
+        ("POST", "auth.test", None, b"", None),
+        ("GET", "auth.test", "application/json", None, None),
+        ("GET", "auth.test", f"{_FORM}; charset=utf-8", None, None),
+        ("POST", "api.test", "application/json", b"{}", "missing_charset"),
+        ("POST", "api.test", f"{_FORM}; charset=utf-8", b"", "superfluous_charset"),
+        ("POST", "conversations.list", "application/json", b"{}", "missing_charset"),
+        ("POST", "conversations.history", "application/json", b"{}", "missing_charset"),
+        ("POST", "conversations.history", f"{_FORM}; charset=utf-8", b"", "superfluous_charset"),
     ],
 )
-def test_slack_post_charset_warnings(client, admin_h, method, path, content_type, want_warning):
+def test_slack_post_charset_warnings(
+    client, admin_h, verb, method, content_type, body, want_warning
+):
+    """The warning ``slack.post_charset_warning`` decides, sent with a body each media type parses,
+    where ``slack.attach_warning`` puts it: last, after whatever `response_metadata` holds. Rendered
+    as every Slack answer is, warning or not."""
     headers = dict(admin_h)
     if content_type is not None:
         headers["content-type"] = content_type
-    if method == "POST":
-        r = client.post(path, headers=headers, content=b"{}")
-    else:
-        r = client.get(path, headers=headers)
+    r = client.request(verb, f"/slack/api/{method}", headers=headers, content=body)
     j = r.json()
+    assert r.content == JSONResponse(j).body
     if want_warning is None:
         assert "warning" not in j
         assert "warnings" not in j.get("response_metadata", {})
     else:
-        assert j.get("warning") == want_warning
-        assert j.get("response_metadata", {}).get("warnings") == [want_warning]
+        assert list(j)[-2:] == ["warning", "response_metadata"]
+        assert j["warning"] == want_warning
+        assert list(j["response_metadata"].items())[-1] == ("warnings", [want_warning])
 
 
 def test_slack_post_charset_warning_preserves_messages_and_order(client, admin_h):

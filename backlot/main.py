@@ -645,13 +645,12 @@ async def parse_slack_form(request: Request, call_next):
 
 @app.middleware("http")
 async def warn_slack_post_charset(request: Request, call_next):
-    """Warn on a Slack POST whose Content-Type has a missing or superfluous charset parameter.
+    """Add the charset warning ``slack.post_charset_warning`` decides to a Slack POST's answer.
 
-    Real Slack adds `warning` and `response_metadata.warnings` to any POST whose Content-Type
-    gets the charset parameter wrong for its media type: `missing_charset` for `application/json`
-    that names no charset, and `superfluous_charset` for a form (`application/x-www-form-urlencoded`
-    or `multipart/form-data`) that names one. Measured against slack.com/api on 2026-10-07 across
-    all twelve methods Backlot serves.
+    Middleware because the answers it goes on are built all over the router, the refusals of
+    ``slack._caller_or_error`` and ``slack._missing_argument`` among them. The body is rendered
+    again by ``JSONResponse``, which renders every Slack answer, so a warned answer is the unwarned
+    one's bytes with the two keys added; ``slack.attach_warning`` says where they go.
     """
     if not (request.url.path.startswith("/slack/") and request.method == "POST"):
         return await call_next(request)
@@ -661,38 +660,12 @@ async def warn_slack_post_charset(request: Request, call_next):
     if warning is None or response.status_code != 200:
         return response
 
-    ctype = response.headers.get("content-type", "")
-    if not ctype.startswith("application/json"):
-        return response
-
-    body_bytes = b"".join([chunk async for chunk in response.body_iterator])
-    try:
-        data = json.loads(body_bytes)
-    except Exception:
-        return Response(
-            content=body_bytes,
-            status_code=response.status_code,
-            headers=response.headers,
-            media_type=response.media_type,
-        )
-
-    if not isinstance(data, dict):
-        return Response(
-            content=body_bytes,
-            status_code=response.status_code,
-            headers=response.headers,
-            media_type=response.media_type,
-        )
-
-    slack.attach_warning(data, warning)
-    new_bytes = json.dumps(data).encode("utf-8")
-    headers = dict(response.headers)
-    headers["content-length"] = str(len(new_bytes))
-    return Response(
-        content=new_bytes,
+    body = b"".join([chunk async for chunk in response.body_iterator])
+    headers = {k: v for k, v in response.headers.items() if k != "content-length"}
+    return JSONResponse(
+        slack.attach_warning(json.loads(body), warning),
         status_code=response.status_code,
         headers=headers,
-        media_type=response.media_type,
     )
 
 

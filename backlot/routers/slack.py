@@ -220,25 +220,21 @@ def _missing_argument(request: Request, *names: str) -> JSONResponse | None:
 
 
 def post_charset_warning(content_type: str | None) -> str | None:
-    """The warning real Slack draws for a POST's Content-Type charset parameter.
+    """The warning real Slack adds to a POST's answer for the charset its Content-Type names, or
+    None: `missing_charset` for `application/json` that names none, `superfluous_charset` for
+    `application/x-www-form-urlencoded` or `multipart/form-data` that names one.
 
-    Real Slack adds `warning` and `response_metadata.warnings` to any POST whose Content-Type
-    gets the charset parameter wrong for its media type: `missing_charset` for `application/json`
-    that names no charset, and `superfluous_charset` for a form (`application/x-www-form-urlencoded`
-    or `multipart/form-data`) that names one. A POST with no Content-Type, a GET, and correct charsets
-    draw no warning. Measured against slack.com/api on 2026-10-07.
+    Matched as sent, measured against slack.com/api on 2026-10-07 and 2026-10-10: an upper-case
+    media type draws neither warning, and `CHARSET=utf-8`, `charset =utf-8`, `charset= utf-8` and
+    an empty value (`charset=`, `charset=""`, `charset=" "`) name no charset.
     """
     if not content_type:
         return None
-    parts = [p.strip() for p in content_type.split(";")]
-    media_type = parts[0].lower()
-    has_charset = False
-    for p in parts[1:]:
-        if "=" in p:
-            k, _ = p.split("=", 1)
-            if k.strip().lower() == "charset":
-                has_charset = True
-                break
+    media_type, *params = (p.strip() for p in content_type.split(";"))
+    has_charset = any(
+        name == "charset" and value[:1] != " " and value.strip('" ')
+        for name, _, value in (p.partition("=") for p in params)
+    )
     if media_type == "application/json":
         return None if has_charset else "missing_charset"
     if media_type in ("application/x-www-form-urlencoded", "multipart/form-data"):
@@ -247,12 +243,7 @@ def post_charset_warning(content_type: str | None) -> str | None:
 
 
 def attach_warning(payload: dict, warning: str) -> dict:
-    """Attach Slack's warning and response_metadata.warnings to a response payload.
-
-    On auth.test, api.test and conversations.history, warning comes after the method's own keys
-    and response_metadata after warning. On an answer that already has response_metadata.messages,
-    warnings follows messages in the same object.
-    """
+    """Attach Slack's warning and response_metadata.warnings to a response payload."""
     meta = payload.pop("response_metadata", None)
     payload["warning"] = warning
     if meta is not None:
