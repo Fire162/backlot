@@ -1879,13 +1879,14 @@ def test_slack_post_charset_warnings(
 ):
     """The warning ``slack.post_charset_warning`` decides, sent with a body each media type parses,
     where ``slack.attach_warning`` puts it: last, after whatever `response_metadata` holds. Rendered
-    as every Slack answer is, warning or not."""
+    as every Slack answer is, warning or not, with a `content-length` that counts the bytes sent."""
     headers = dict(admin_h)
     if content_type is not None:
         headers["content-type"] = content_type
     r = client.request(verb, f"/slack/api/{method}", headers=headers, content=body)
     j = r.json()
     assert r.content == JSONResponse(j).body
+    assert r.headers["content-length"] == str(len(r.content))
     if want_warning is None:
         assert "warning" not in j
         assert "warnings" not in j.get("response_metadata", {})
@@ -1895,46 +1896,59 @@ def test_slack_post_charset_warnings(
         assert list(j["response_metadata"].items())[-1] == ("warnings", [want_warning])
 
 
-def test_slack_post_charset_warning_preserves_messages_and_order(client, admin_h):
-    headers = dict(admin_h)
-    headers["content-type"] = "application/json"
-    r = client.post("/slack/api/conversations.history", headers=headers, content=b"{}")
-    j = r.json()
-    assert j["ok"] is False
-    assert j["error"] == "invalid_arguments"
-    assert j["warning"] == "missing_charset"
-    assert j["response_metadata"] == {
-        "messages": ["[ERROR] missing required field: channel"],
-        "warnings": ["missing_charset"],
-    }
-    assert list(j.keys()) == ["ok", "error", "warning", "response_metadata"]
-    assert list(j["response_metadata"].keys()) == ["messages", "warnings"]
-
-
-def test_slack_post_charset_warning_on_auth_failures(client):
-    r_no_auth = client.post(
-        "/slack/api/auth.test",
-        headers={"content-type": "application/json"},
-        content=b"{}",
-    )
-    assert r_no_auth.json() == {
-        "ok": False,
-        "error": "not_authed",
-        "warning": "missing_charset",
-        "response_metadata": {"warnings": ["missing_charset"]},
-    }
-
-    r_bad_auth = client.post(
-        "/slack/api/auth.test",
-        headers={
-            "authorization": "Bearer bad-token",
-            "content-type": "application/x-www-form-urlencoded; charset=utf-8",
-        },
-        content=b"",
-    )
-    assert r_bad_auth.json() == {
-        "ok": False,
-        "error": "invalid_auth",
-        "warning": "superfluous_charset",
-        "response_metadata": {"warnings": ["superfluous_charset"]},
-    }
+@pytest.mark.parametrize(
+    "method, token, content_type, body, want",
+    [
+        (
+            "conversations.history",
+            "admin",
+            "application/json",
+            b"{}",
+            {
+                "ok": False,
+                "error": "invalid_arguments",
+                "warning": "missing_charset",
+                "response_metadata": {
+                    "messages": ["[ERROR] missing required field: channel"],
+                    "warnings": ["missing_charset"],
+                },
+            },
+        ),
+        (
+            "auth.test",
+            None,
+            "application/json",
+            b"{}",
+            {
+                "ok": False,
+                "error": "not_authed",
+                "warning": "missing_charset",
+                "response_metadata": {"warnings": ["missing_charset"]},
+            },
+        ),
+        (
+            "auth.test",
+            "bad-token",
+            f"{_FORM}; charset=utf-8",
+            b"",
+            {
+                "ok": False,
+                "error": "invalid_auth",
+                "warning": "superfluous_charset",
+                "response_metadata": {"warnings": ["superfluous_charset"]},
+            },
+        ),
+    ],
+)
+def test_slack_post_charset_warning_on_a_refusal(
+    client, admin_h, method, token, content_type, body, want
+):
+    """A refusal is warned as an answer is, where ``slack.attach_warning`` puts the two keys. The
+    bytes are ``want`` rendered, so the order of its members is asserted as well as their values."""
+    headers = {"content-type": content_type}
+    if token == "admin":
+        headers.update(admin_h)
+    elif token is not None:
+        headers["authorization"] = f"Bearer {token}"
+    r = client.post(f"/slack/api/{method}", headers=headers, content=body)
+    assert r.content == JSONResponse(want).body
