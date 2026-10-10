@@ -1831,11 +1831,6 @@ def test_slack_deactivation_changes_every_slack_answer_about_a_member_and_nothin
         conn.close()
 
 
-# Measured against slack.com/api on 2026-10-07:
-# Real Slack adds a warning to a POST whose Content-Type gets the charset parameter wrong
-# for its media type: missing_charset for application/json without one, superfluous_charset
-# for a form (application/x-www-form-urlencoded or multipart/form-data) that names one.
-# GETs, POSTs without Content-Type, and correct charsets draw no warning.
 _FORM = "application/x-www-form-urlencoded"
 _MULTIPART = "multipart/form-data; boundary=b"
 _ONE_PART = b'--b\r\nContent-Disposition: form-data; name="x"\r\n\r\ny\r\n--b--\r\n'
@@ -1845,6 +1840,10 @@ _ONE_PART = b'--b\r\nContent-Disposition: form-data; name="x"\r\n\r\ny\r\n--b--\
     "verb, method, content_type, body, want_warning",
     [
         ("POST", "auth.test", "application/json", b"{}", "missing_charset"),
+        ("POST", "auth.test", "application/json", b"", None),
+        ("POST", "auth.test", "text/plain", b"{}", "missing_charset"),
+        ("POST", "auth.test", "text/plain", b"", None),
+        ("POST", "auth.test", "text/plain; charset=utf-8", b"{}", None),
         ("POST", "auth.test", "application/json; charset=", b"{}", "missing_charset"),
         ("POST", "auth.test", 'application/json; charset=""', b"{}", "missing_charset"),
         ("POST", "auth.test", "application/json; CHARSET=utf-8", b"{}", "missing_charset"),

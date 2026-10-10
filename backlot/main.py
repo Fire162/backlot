@@ -657,7 +657,9 @@ async def warn_slack_post_charset(request: Request, call_next):
     if not (request.url.path.startswith("/slack/") and request.method == "POST"):
         return await call_next(request)
 
-    warning = slack.post_charset_warning(request.headers.get("content-type"))
+    warning = slack.post_charset_warning(
+        request.headers.get("content-type"), bool(await request.body())
+    )
     response = await call_next(request)
     if warning is None or response.status_code != 200:
         return response

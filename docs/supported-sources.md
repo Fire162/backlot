@@ -590,8 +590,8 @@ answer an id that names nothing gets, so a private room's name, purpose and memb
 readable from its id alone. A required argument that was never sent is `invalid_arguments` rather
 than a `not_found` for something the caller never named.
 
-A POST whose `Content-Type` is `application/json` with no charset is answered with real's
-`missing_charset` warning, and a form or multipart one that names a charset with
+A POST with a body sent as `application/json` or `text/plain` with no charset is answered with
+real's `missing_charset` warning, and a form or multipart one that names a charset with
 `superfluous_charset`, each in `warning` and in `response_metadata.warnings`.
 
 ## Backlot's own endpoints
