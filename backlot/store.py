@@ -2059,8 +2059,12 @@ def _fireflies_where(
         sql += " AND channel = ?"
         params.append(channel)
     if host_email:
-        sql += " AND lower(author_email) = ?"
-        params.append(host_email.lower())
+        # Matched as written, not case-folded: measured against api.fireflies.ai on 2026-10-10, a
+        # host's address as stored found their meetings, and none came back with all of it, its
+        # local part, its domain or only its first letter upper-cased, matching organizer_email's
+        # behavior. That workspace's organizer and participant addresses are all lower-case.
+        sql += " AND author_email = ?"
+        params.append(host_email)
     if organizers:
         # `organizer_email` is null when the organizer IS the host, which is the common case, so
         # the filter has to consider both — otherwise organizing a meeting you also hosted would
