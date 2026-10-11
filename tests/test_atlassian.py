@@ -1452,6 +1452,59 @@ def test_jira_search_refuses_an_integer_parameter_it_cannot_convert(client, admi
     assert r.json()["instance"] == "/rest/api/3/search/jql"
 
 
+@pytest.mark.parametrize("val", ["x", "null", "2", "y", "n", " "])
+def test_jira_search_refuses_unconvertible_fields_by_keys(client, admin_h, val):
+    r = client.get(f"/atlassian/rest/api/3/search/jql?jql=project%20is%20not%20EMPTY&fieldsByKeys={val}", headers=admin_h)
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"] == f"Failed to convert 'fieldsByKeys' with value: '{val}'"
+    assert r.json()["instance"] == "/rest/api/3/search/jql"
+
+
+@pytest.mark.parametrize("val", ["true", "TRUE", "FALSE", "yes", "Yes", "on", "ON", "no", "off", "1", "0", " true", "true ", ""])
+def test_jira_search_accepts_convertible_fields_by_keys(client, admin_h, val):
+    r = client.get(f"/atlassian/rest/api/3/search/jql?jql=project%20is%20not%20EMPTY&maxResults=1&fieldsByKeys={val}", headers=admin_h)
+    assert r.status_code == 200, r.text
+
+
+@pytest.mark.parametrize("val", ["a", "1.5", "1,2", "1_0", "9223372036854775808"])
+def test_jira_search_refuses_unconvertible_reconcile_issues(client, admin_h, val):
+    r = client.get(f"/atlassian/rest/api/3/search/jql?jql=project%20is%20not%20EMPTY&reconcileIssues={val}", headers=admin_h)
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"] == f"Failed to convert 'reconcileIssues' with value: '{val}'"
+    assert r.json()["instance"] == "/rest/api/3/search/jql"
+
+
+@pytest.mark.parametrize("val", ["1", "-1", "+1", " 1", "1 ", "9223372036854775807", ""])
+def test_jira_search_accepts_convertible_reconcile_issues(client, admin_h, val):
+    r = client.get(f"/atlassian/rest/api/3/search/jql?jql=project%20is%20not%20EMPTY&maxResults=1&reconcileIssues={val}", headers=admin_h)
+    assert r.status_code == 200, r.text
+
+
+def test_jira_search_conversion_error_precedence_and_short_circuit(client, admin_h):
+    # maxResults conversion failure comes ahead of fieldsByKeys and reconcileIssues
+    r = client.get("/atlassian/rest/api/3/search/jql?fieldsByKeys=null&maxResults=abc", headers=admin_h)
+    assert r.status_code == 400
+    assert "maxResults" in r.json()["detail"]
+
+    # fieldsByKeys conversion failure comes ahead of reconcileIssues
+    r = client.get("/atlassian/rest/api/3/search/jql?reconcileIssues=a&fieldsByKeys=null", headers=admin_h)
+    assert r.status_code == 400
+    assert "fieldsByKeys" in r.json()["detail"]
+
+    # Conversion 400 comes ahead of bad page token, maxResults range, and unbounded JQL
+    r = client.get("/atlassian/rest/api/3/search/jql?fieldsByKeys=null&nextPageToken=bogus", headers=admin_h)
+    assert r.status_code == 400
+    assert "fieldsByKeys" in r.json()["detail"]
+
+    r = client.get("/atlassian/rest/api/3/search/jql?reconcileIssues=a&maxResults=0", headers=admin_h)
+    assert r.status_code == 400
+    assert "reconcileIssues" in r.json()["detail"]
+
+    r = client.get("/atlassian/rest/api/3/search/jql?reconcileIssues=a", headers=admin_h)
+    assert r.status_code == 400
+    assert "reconcileIssues" in r.json()["detail"]
+
+
 @pytest.mark.parametrize("param", ["limit", "start"])
 def test_confluence_refuses_an_integer_parameter_it_cannot_convert(client, admin_h, param):
     """Confluence's own envelope, not Jira's: two keys, a bare `application/json`, and the raw

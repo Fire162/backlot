@@ -539,9 +539,11 @@ async def jira_search(request: Request):
         limit = _jira_search_max_results(body["maxResults"]) if max_results_sent else default_size
         token = raw_token
     else:
-        jql = _str_param(request, "jql") or ""
         max_results_sent = _jira_max_results_was_sent(request)
         limit = _int_param(request, "maxResults", default_size)
+        _bool_param(request, "fieldsByKeys")
+        _int_param(request, "reconcileIssues", 0, width=JAVA_LONG)
+        jql = _str_param(request, "jql") or ""
         token = _str_param(request, "nextPageToken")
     # An undecodable token is refused before the project clause is resolved (measured
     # 2026-09-16; see test_jira_search_refuses_a_page_token_it_cannot_decode).
@@ -1907,6 +1909,26 @@ def _int_param(
         # flowed into the query where real answered 400.
         raise errors_atlassian.integer_conversion_failure(request.url.path, name, values)
     return n
+
+
+_JIRA_BOOLEAN_TRUE = frozenset({"true", "yes", "on", "1"})
+_JIRA_BOOLEAN_FALSE = frozenset({"false", "no", "off", "0"})
+
+
+def _bool_param(request: Request, name: str, default: bool | None = None) -> bool | None:
+    """One query parameter as a boolean, converted the way real Jira converts it."""
+    values = request.query_params.getlist(name)
+    if not values:
+        return default
+    raw = values[0]
+    if raw == "":
+        return default
+    cleaned = raw.strip().lower()
+    if cleaned in _JIRA_BOOLEAN_TRUE:
+        return True
+    if cleaned in _JIRA_BOOLEAN_FALSE:
+        return False
+    raise errors_atlassian.integer_conversion_failure(request.url.path, name, values)
 
 
 async def _jira_search_body(request: Request) -> dict:
