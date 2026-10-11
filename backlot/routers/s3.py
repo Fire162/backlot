@@ -1775,6 +1775,8 @@ async def object_get(request: Request, bucket: str, key: str):
     ends disagree on a bad `versionId` beside a bad mode or a bad part: 11 of 16 requests of each
     pair refused the version first (all measured 2026-09-30)."""
     head = request.method == "HEAD"
+    if not key:
+        return await (head_bucket(request, bucket) if head else bucket_get(request, bucket))
     q = request.query_params
     selected = _key_selected(q)
     if selected == ["uploadId"] and "partNumber" in q:

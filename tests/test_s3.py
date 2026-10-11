@@ -2164,6 +2164,28 @@ def test_the_listing_location_and_object_still_answer_and_an_unknown_key_is_igno
             assert r.status == 200 and r.read() == OBJECT_TEXT, query
 
 
+def test_a_bucket_path_ending_in_a_slash_answers_as_the_bucket(live_server):
+    """Measured against s3.amazonaws.com 2026-10-11: /{bucket}/ matches as the bucket rather than
+    as an object whose key is empty, answering with the bucket's listing, configuration or subresource."""
+    base_url, settings = live_server
+    token = settings.admin_token
+    for query in ("", "?list-type=2"):
+        root = _get_xml(base_url, f"/s3/eng-artifacts/{query}", token)
+        assert root.tag == f"{NS}ListBucketResult", query
+    assert _get_xml(base_url, "/s3/eng-artifacts/?location", token).tag == f"{NS}LocationConstraint"
+    assert (
+        _get_xml(base_url, "/s3/eng-artifacts/?uploads", token).tag
+        == f"{NS}ListMultipartUploadsResult"
+    )
+    assert _get_xml(base_url, "/s3/eng-artifacts/?acl", token).tag == f"{NS}AccessControlPolicy"
+    for query in ("", "?list-type=2"):
+        url, headers = _sign_get(base_url, f"/s3/eng-artifacts/{query}", token, method="HEAD")
+        with urllib.request.urlopen(
+            urllib.request.Request(url, headers=headers, method="HEAD")
+        ) as r:
+            assert r.status == 200, query
+
+
 def test_two_subresources_at_once_conflict_the_way_real_s3_conflicts_them(live_server):
     base_url, settings = live_server
     # Named alphabetically whatever order they were sent in, and the first is the ArgumentValue.
