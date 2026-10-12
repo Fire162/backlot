@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
 from backlot import auth, store, synth
+from backlot.acl import Caller
 from backlot.openapi import qp
 from backlot.routers import json_body
 
@@ -38,6 +39,17 @@ router = APIRouter(prefix="/hubspot", tags=["hubspot"])
 _PAGE_MAX = 100
 # The associations endpoint pages at 500 per request, like the vendor's.
 _ASSOC_PAGE_MAX = 500
+
+# Object types whose archived listing api.hubapi.com refused with a 400, measured 2026-10-08,
+# mapped to the objectTypeId and name that 400's message gives. The standard types the key had no
+# scope for, and custom objects (the key cannot read their schemas), were not measured and serve
+# the archived view here.
+_NO_ARCHIVED_PAGING = {
+    "meetings": "0-47 (MEETING_EVENT)",
+    "communications": "0-18 (COMMUNICATION)",
+    "deal_splits": "0-72 (DEAL_SPLIT)",
+    "quote_templates": "0-64 (QUOTE_TEMPLATE)",
+}
 
 
 # --- OpenAPI enrichment --------------------------------------------------
@@ -104,6 +116,7 @@ _B_SEARCH = {
     }
 }
 _B_BATCH = {
+    "parameters": [qp("archived", "boolean")],
     "requestBody": {
         "content": {
             "application/json": {
@@ -120,7 +133,7 @@ _B_BATCH = {
                 }
             }
         }
-    }
+    },
 }
 
 
@@ -156,9 +169,33 @@ def _clamp(raw, default: int, cap: int) -> int:
 
 
 def _flag(raw) -> bool:
-    """`archived=1` must not silently serve the un-archived view; accept the spellings a raw caller
-    plausibly sends (the official client always sends `true`/`false`)."""
-    return str(raw or "").strip().lower() in {"true", "1", "yes"}
+    """`archived` is true when its value is `true` in any letter case, with nothing trimmed.
+    Measured against api.hubapi.com (2026-10-01, 2026-10-07, 2026-10-08): `true`, `TRUE` and `True`
+    serve the archived view (a 400 on the types in `_NO_ARCHIVED_PAGING`); `1`, `yes`, `abc`, an
+    empty value, and `true` with whitespace before or after it (a space, tab, newline, carriage
+    return or no-break space) serve the active one. The Python client `hubspot-api-client` 12.0.0
+    sends `True`/`False`, and the Node client `@hubspot/api-client` 14.0.1 sends `true`/`false`."""
+    return str(raw or "").lower() == "true"
+
+
+def _hidden_archived(row, request: Request) -> bool:
+    """Whether ``row`` is archived and the request did not ask for archived records, reading
+    `archived` as the listing does (`_flag` of its first value). Measured against api.hubapi.com
+    over a portal with one archived contact (2026-09-30, 2026-10-09): `GET …/{id}` answers it with
+    the 404 a missing id gets, and batch/read with the not-found error a missing id gets, unless the
+    first `archived` is `true` in any letter case; an active contact is served by both whatever
+    `archived` is."""
+    return row["archived"] is not None and not _flag(_first_query(request.query_params, "archived"))
+
+
+def _first_query(qp, name: str):
+    """The first value the query carries for ``name``, or ``None`` when it carries none.
+    Real reads a repeated `archived` on an object listing from its first value, where Starlette's
+    `QueryParams.get` returns the last. Measured against api.hubapi.com (2026-10-07, 2026-10-08):
+    `archived=true&archived=false` answers like `archived=true`, and `archived=false&archived=true`,
+    `archived=&archived=true` and `archived=yes&archived=true` like `archived=false`."""
+    values = qp.getlist(name)
+    return values[0] if values else None
 
 
 def _props(row) -> dict:
@@ -580,6 +617,99 @@ def _refuse_an_operator(raw: bytes, body: dict) -> JSONResponse | None:
     return None
 
 
+def _java_double(x: float) -> str:
+    """``x`` as real echoes it, in the form of Java's `Double.toString`: plain from 10^-3 up to
+    10^7, and otherwise with one digit before the point (`1.0E7`, `1.23456789125E8`, `1.0E-4`)."""
+    if x == 0 or 1e-3 <= abs(x) < 1e7:
+        return repr(x)
+    if abs(x) == float("inf"):
+        return "Infinity" if x > 0 else "-Infinity"
+    digits = repr(abs(x)).split("e")[0].replace(".", "").strip("0")
+    mantissa, exponent = format(x, f".{max(len(digits) - 1, 1)}e").split("e")
+    return f"{mantissa}E{int(exponent)}"
+
+
+def _not_a_list(value) -> str:
+    """Real's text for a batch/read member it reads as a list when the body holds something else
+    there, naming the JSON value it found."""
+    if isinstance(value, bool):
+        kind, token = "Boolean", "VALUE_TRUE" if value else "VALUE_FALSE"
+    elif isinstance(value, int):
+        kind, token = "Integer", "VALUE_NUMBER_INT"
+    elif isinstance(value, float):
+        kind, token = "Floating-point", "VALUE_NUMBER_FLOAT"
+    elif isinstance(value, str):
+        kind, token = "String", "VALUE_STRING"
+    else:
+        kind, token = "Object", "START_OBJECT"
+    return f"Cannot deserialize value of type <>` from {kind} value (token `JsonToken.{token}`)"
+
+
+def _not_an_input(item) -> str:
+    """Real's text for an element of `inputs` that is an array, a boolean or a number. For an
+    integer it names the narrowest of Java's int, long and BigInteger that holds the value."""
+    if isinstance(item, list):
+        return "Cannot deserialize value of type  from Array value (token `JsonToken.START_ARRAY`)"
+    if isinstance(item, bool):
+        arg, shown = "boolean/Boolean", f"boolean value ({str(item).lower()})"
+    elif isinstance(item, float):
+        arg, shown = "double/Double", f"Number value ({_java_double(item)})"
+    elif -(2**31) <= item < 2**31:
+        arg, shown = "int/Int", f"Number value ({item})"
+    elif -(2**63) <= item < 2**63:
+        arg, shown = "long/Long", f"Number value ({item})"
+    else:
+        arg, shown = "BigInteger", f"Number value ({item})"
+    return (
+        "Cannot construct instance of  (although at least one Creator exists): "
+        f"no {arg}-argument constructor/factory method to deserialize from {shown}"
+    )
+
+
+def _invalid_at(raw: bytes, path: tuple, text: str) -> JSONResponse:
+    line, column = _token_at(raw, path)
+    return _error(400, f"Invalid input JSON on line {line}, column {column}: {text}")
+
+
+def _refuse_a_batch_read_shape(raw: bytes, body: dict) -> JSONResponse | None:
+    """Real's 400 for a batch/read body it cannot read, or None. Measured against api.hubapi.com on
+    2026-10-09, 2026-10-11 and 2026-10-12: real reads `inputs`, `properties` and
+    `propertiesWithHistory` in body order and stops at the first that is neither null nor a list, or
+    at the first element of `inputs` that is neither an object nor a string, naming where that value
+    starts. A string `properties` or `propertiesWithHistory` is echoed trimmed (`_TRIM`), and one
+    that trims to nothing is named by its field alone. A null element of `inputs` is refused only
+    once the rest of the body has been read, in an envelope with no `category`. The elements of
+    `properties` and the members of an object in `inputs` are not checked here."""
+    null_input = False
+    for key, value in body.items():
+        if key not in ("inputs", "properties", "propertiesWithHistory") or value is None:
+            continue
+        if not isinstance(value, list):
+            if key == "inputs" or not isinstance(value, str):
+                return _invalid_at(raw, (key,), _not_a_list(value))
+            if not value.strip(_TRIM):
+                return _error(
+                    400, f'Invalid input JSON: unable to deserialize field "{key}". Invalid value: '
+                )
+            return _invalid_at(
+                raw,
+                (key,),
+                "Cannot construct instance of  (although at least one Creator exists): no "
+                "String-argument constructor/factory method to deserialize from String value "
+                f"('{value.strip(_TRIM)}')",
+            )
+        for i, item in enumerate(value if key == "inputs" else ()):
+            if item is None:
+                null_input = True
+            elif not isinstance(item, (str, dict)):
+                return _invalid_at(raw, ("inputs", i), _not_an_input(item))
+    if null_input:
+        return JSONResponse(
+            status_code=400, content={"status": "error", "message": "Input IDs must be non-null."}
+        )
+    return None
+
+
 def _match_one(prop, f: dict) -> bool:
     op = _operator(f)
     present = prop is not None
@@ -733,6 +863,27 @@ def _matches(row, body: dict) -> bool:
     )
 
 
+def _bearer_credential(request: Request) -> str | None:
+    """The key from `Authorization: Bearer <key>`: the scheme in that case, one space, and a key
+    with no whitespace in it. Space or tab around the whole value is not part of it.
+
+    `auth.bearer_token` reads the scheme in any case and any run of whitespace after it, and takes
+    GitHub's `token <t>` as well. HubSpot does not: measured against api.hubapi.com on 2026-09-30
+    with a valid key, `bearer <key>`, `Bearer  <key>` (two spaces), `Bearer <key> x`,
+    `Basic Zm9vOmJhcg==` and the bare key were each answered with the INVALID_AUTHENTICATION 401
+    where `Bearer <key>` is served. On 2026-10-09 `BEARER <key>`, a tab after the scheme and
+    `token <key>` were the 401 too, and a space or tab before or after `Bearer <key>` was served.
+    """
+    scheme, _, key = (request.headers.get("authorization") or "").strip(" \t").partition(" ")
+    if scheme == "Bearer" and key and not any(c.isspace() for c in key):
+        return key
+    return None
+
+
+def _caller(request: Request) -> Caller | None:
+    return auth.acl(request).resolve(_bearer_credential(request))
+
+
 # --------------------------------------------------------------------------- routes
 
 
@@ -742,7 +893,7 @@ def _matches(row, body: dict) -> bool:
     openapi_extra={"parameters": _P_LIST},
 )
 async def list_objects(object_type: str, request: Request):
-    caller = auth.resolve_bearer(request)
+    caller = _caller(request)
     if caller is None:
         return _error(401, "Authentication credentials not found.", "INVALID_AUTHENTICATION")
     spellings = _resolve_type(request, object_type)
@@ -753,13 +904,20 @@ async def list_objects(object_type: str, request: Request):
     after_doc, err = _resolve_cursor(request, qp.get("after"))
     if err is not None:
         return err
+    archived = _flag(_first_query(qp, "archived"))
+    type_label = _NO_ARCHIVED_PAGING.get(_CANONICAL.get(object_type, object_type))
+    if archived and type_label is not None:
+        return _error(
+            400,
+            f"Paging through deleted objects is not yet supported for object type {type_label}",
+        )
     rows = store.list_hubspot_objects(
         auth.conn(request),
         spellings,
         after_id=after_doc,
         visible_ids=auth.visible_ids(request, caller),
         limit=limit + 1,
-        archived=_flag(qp.get("archived")),
+        archived=archived,
     )
     return _page(rows, limit, _keep(qp.get("properties")))
 
@@ -770,14 +928,18 @@ async def list_objects(object_type: str, request: Request):
     openapi_extra={"parameters": _P_READ},
 )
 async def get_object(object_type: str, record_id: str, request: Request):
-    caller = auth.resolve_bearer(request)
+    caller = _caller(request)
     if caller is None:
         return _error(401, "Authentication credentials not found.", "INVALID_AUTHENTICATION")
     # One ACL-scoped query, not a resolve followed by a get_document refetch of the same row:
     # `id` is the PRIMARY KEY, so the ACL clause can only narrow "found" to "not found", never
     # redirect to a different row (see store.hubspot_by_id).
     row = store.hubspot_by_id(auth.conn(request), record_id, auth.visible_ids(request, caller))
-    if row is None or row["object_type"] not in _aliases(object_type):
+    if (
+        row is None
+        or row["object_type"] not in _aliases(object_type)
+        or _hidden_archived(row, request)
+    ):
         return _error(404, "resource not found", "OBJECT_NOT_FOUND")
     return _record(row, _keep(request.query_params.get("properties")))
 
@@ -786,7 +948,7 @@ async def get_object(object_type: str, record_id: str, request: Request):
     "/crm/v3/objects/{object_type}/search", response_model=HubspotPage, openapi_extra=_B_SEARCH
 )
 async def search_objects(object_type: str, request: Request):
-    caller = auth.resolve_bearer(request)
+    caller = _caller(request)
     if caller is None:
         return _error(401, "Authentication credentials not found.", "INVALID_AUTHENTICATION")
     spellings = _resolve_type(request, object_type)
@@ -851,22 +1013,30 @@ async def search_objects(object_type: str, request: Request):
     "/crm/v3/objects/{object_type}/batch/read", response_model=HubspotPage, openapi_extra=_B_BATCH
 )
 async def batch_read(object_type: str, request: Request):
-    caller = auth.resolve_bearer(request)
+    caller = _caller(request)
     if caller is None:
         return _error(401, "Authentication credentials not found.", "INVALID_AUTHENTICATION")
     spellings = _resolve_type(request, object_type)
     if spellings is None:
         return _unknown_type(object_type)
     body = await json_body(request)
+    refused = _refuse_a_batch_read_shape(await request.body(), body)
+    if refused is not None:
+        return refused
     conn, visible = auth.conn(request), auth.visible_ids(request, caller)
     keep = _keep(body.get("properties"))
     results, errors = [], []
     for item in body.get("inputs") or []:
-        rid = str(item.get("id"))
+        # A string in `inputs` is answered as `{"id": <that string>}` is (measured 2026-10-11).
+        rid = item if isinstance(item, str) else str(item.get("id"))
         # One ACL-scoped query, not a resolve followed by a get_document refetch of the same
         # row -- see get_object's comment for why the collapse is safe.
         row = store.hubspot_by_id(conn, rid, visible)
-        if row is None or row["object_type"] not in _aliases(object_type):
+        if (
+            row is None
+            or row["object_type"] not in _aliases(object_type)
+            or _hidden_archived(row, request)
+        ):
             errors.append(
                 {
                     "status": "error",
@@ -897,7 +1067,7 @@ async def batch_read(object_type: str, request: Request):
 async def list_associations(
     object_type: str, record_id: str, to_object_type: str, request: Request
 ):
-    caller = auth.resolve_bearer(request)
+    caller = _caller(request)
     if caller is None:
         return _error(401, "Authentication credentials not found.", "INVALID_AUTHENTICATION")
     conn, visible = auth.conn(request), auth.visible_ids(request, caller)
