@@ -1151,11 +1151,12 @@ def list_documents(
     not_author_email=None,
     exclude_trashed=False,
     title=None,
+    subtype=None,
 ) -> list[sqlite3.Row]:
     # state: only valid for source_type="github" — it's the only items table with a `state`
     # column; passing it for any other source_type raises sqlite3.OperationalError. Likewise
     # exclude_trashed, which only gdrive_files has a column for. title matches the whole title,
-    # ignoring ASCII case.
+    # ignoring ASCII case. subtype is Confluence's content type, where a row with none is a page.
     tbl = table(source_type)
     sql = f"SELECT * FROM {tbl} WHERE 1=1"
     params: list = []
@@ -1168,6 +1169,9 @@ def list_documents(
     if title is not None:
         sql += " AND title = ? COLLATE NOCASE"
         params.append(title)
+    if subtype is not None:
+        sql += " AND COALESCE(subtype, 'page') = ?"
+        params.append(subtype)
     clause, cparams = _acl_clause(source_type, visible_ids=visible_ids)
     sql += clause + f" ORDER BY {_order_by(source_type)} LIMIT ? OFFSET ?"
     params += cparams + [limit, offset]
@@ -1979,6 +1983,7 @@ def count_documents(
     exclude_trashed=False,
     roots_only=False,
     title=None,
+    subtype=None,
 ) -> int:
     # state: only valid for source_type="github" — it's the only items table with a `state`
     # column; passing it for any other source_type raises sqlite3.OperationalError. Likewise
@@ -1999,6 +2004,9 @@ def count_documents(
     if title is not None:
         sql += " AND title = ? COLLATE NOCASE"
         params.append(title)
+    if subtype is not None:
+        sql += " AND COALESCE(subtype, 'page') = ?"
+        params.append(subtype)
     clause, cparams = _acl_clause(source_type, visible_ids=visible_ids)
     sql += clause
     params += cparams
@@ -2725,6 +2733,13 @@ def gmail_thread(conn, thread_id, visible_ids=None) -> list[sqlite3.Row]:
     return conn.execute(sql, params).fetchall()
 
 
+def gmail_rows_with_attachments(conn, visible_ids=None) -> list[sqlite3.Row]:
+    """Every Gmail message the caller can see that holds at least one attachment."""
+    sql = "SELECT * FROM gmail_messages WHERE COALESCE(attachments, '') NOT IN ('', '[]')"
+    clause, cp = _acl_clause("gmail", visible_ids=visible_ids)
+    return conn.execute(sql + clause, cp).fetchall()
+
+
 def gmail_by_id(conn, message_id, visible_ids=None) -> sqlite3.Row | None:
     """One message by the id the API reports. The stored key is unpadded lowercase hex; callers
     pass the id as the client spelled it, so both the case and any leading zeros are normalized
@@ -2755,6 +2770,10 @@ def github_by_number(conn, repo, number, visible_ids=None) -> sqlite3.Row | None
     can be primary (see the schema) — so this CAN return a file row, and the caller must reject
     one. `routers.github._issue_row` is where that happens; a file is addressed by (repo, path)
     and its number is never served."""
+    # Real answers a number outside 64 bits with the 404 an unknown number gets (api.github.com,
+    # 2026-10-10). SQLite holds no such number, and sqlite3 raises OverflowError binding one.
+    if not -(2**63) <= number < 2**63:
+        return None
     clause, cp = _acl_clause("github", visible_ids=visible_ids)
     return conn.execute(
         f"SELECT * FROM github_items WHERE repo = ? AND number = ?{clause}",
@@ -2911,6 +2930,8 @@ def get_github_comment(conn, comment_id: int) -> sqlite3.Row | None:
     A PRIMARY KEY lookup: the id is assigned at import (see :mod:`backlot.importer.byo`), so it
     cannot be ambiguous.
     """
+    if not -(2**63) <= comment_id < 2**63:  # a miss, as in github_by_number
+        return None
     return conn.execute(
         "SELECT id, repo, number, seq, author_email, body, created_ts, reactions, path, line, "
         "diff_hunk FROM github_comments WHERE id = ?",
