@@ -1750,10 +1750,13 @@ def test_jira_comma_joins_a_repeated_string_parameter_before_validating_it(paged
 
 
 @pytest.mark.parametrize("slash", ["", "/"])
-def test_jira_search_refuses_an_integer_parameter_it_cannot_convert(client, admin_h, slash):
-    r = client.get(f"/atlassian/rest/api/3/search/jql{slash}?maxResults=abc", headers=admin_h)
+@pytest.mark.parametrize(
+    "param,value", [("maxResults", "abc"), ("fieldsByKeys", "x"), ("reconcileIssues", "a")]
+)
+def test_jira_search_refuses_a_parameter_it_cannot_convert(client, admin_h, slash, param, value):
+    r = client.get(f"/atlassian/rest/api/3/search/jql{slash}?{param}={value}", headers=admin_h)
     assert r.status_code == 400, r.text
-    assert r.json()["detail"] == "Failed to convert 'maxResults' with value: 'abc'"
+    assert r.json()["detail"] == f"Failed to convert '{param}' with value: '{value}'"
     assert r.json()["instance"] == f"/rest/api/3/search/jql{slash}"
 
 
@@ -1837,8 +1840,6 @@ _BOUNDED = f"{_ANY_PROJECT}&maxResults=1"
         (f"{_BOUNDED}&reconcileIssues=a&fieldsByKeys=x", ("fieldsByKeys", "x")),
         (f"{_ANY_PROJECT}&fieldsByKeys=x&nextPageToken=bogus", ("fieldsByKeys", "x")),
         (f"{_ANY_PROJECT}&reconcileIssues=a&maxResults=0", ("reconcileIssues", "a")),
-        ("fieldsByKeys=x", ("fieldsByKeys", "x")),
-        ("reconcileIssues=a", ("reconcileIssues", "a")),
     ],
 )
 def test_jira_search_get_converts_fields_by_keys_and_reconcile_issues(
