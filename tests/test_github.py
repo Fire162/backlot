@@ -4390,6 +4390,13 @@ def test_github_unsupported_api_version_is_refused_ahead_of_a_missing_credential
         ("pulls/1", "application/vnd.github.diff, application/json", False, False),
         ("pulls/1", "application/json, application/vnd.github.diff", False, False),
         ("pulls/1", "application/vnd.github.v3.diff+json", False, False),
+        ("pulls/1", "application/vnd.github.DIFF", True, False),
+        ("pulls/1", "APPLICATION/VND.GITHUB.DIFF", True, False),
+        ("pulls/1", "application/vnd.github.diff;q=0", True, False),
+        ("pulls/1", "application/vnd.github.diff; q=0, application/json", True, False),
+        ("pulls/1", "application/vnd.github.diff;charset=utf-8", False, False),
+        ("pulls/1", "text/plain, application/vnd.github.diff", False, False),
+        ("pulls/1", "application/vnd.github.patch;q=0.5, application/json;q=1", False, False),
         ("pulls/1", "application/vnd.github.sha", True, False),
         *[
             (path, accept, True, True)
@@ -4771,6 +4778,33 @@ def test_github_pull_accept_diff_returns_a_unified_diff(diff_pr, gh_admin_h, gh_
         headers={**gh_admin_h, "Accept": "application/vnd.github.diff"},
     ).json()
     assert issue["number"] == issue_num
+
+
+@pytest.mark.parametrize(
+    "accept, is_diff",
+    [
+        ("application/vnd.github.DIFF", False),
+        ("APPLICATION/VND.GITHUB.DIFF", False),
+        ("application/vnd.github.diff;q=0", False),
+        ("application/vnd.github.diff; q=0, application/json", False),
+        ("application/vnd.github.diff;charset=utf-8", True),
+        ("text/plain, application/vnd.github.diff", True),
+        ("application/vnd.github.diff;q=0.5", True),
+    ],
+)
+def test_github_pull_accept_diff_media_negotiation(diff_pr, accept, is_diff):
+    c, h, org, num = diff_pr
+    r = c.get(
+        f"/github/repos/{org}/diffable/pulls/{num}",
+        headers={**h, "Accept": accept},
+    )
+    assert r.status_code == 200
+    if is_diff:
+        assert r.headers["content-type"] == "application/vnd.github.diff; charset=utf-8"
+        assert not r.text.startswith("{")
+    else:
+        assert r.headers["content-type"] == "application/json; charset=utf-8"
+        assert r.json()["number"] == num
 
 
 def test_github_pull_accept_patch_returns_an_mbox_patch(diff_pr):

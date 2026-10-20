@@ -894,7 +894,27 @@ router = APIRouter(
 
 
 def _accept_types(request: Request) -> list[str]:
-    return [t.split(";")[0].strip().lower() for t in request.headers.get("accept", "").split(",")]
+    """Media types requested in ``Accept``, excluding any member with a ``q=0`` weight.
+    Case is preserved: real GitHub matches vendor media types case-sensitively."""
+    types: list[str] = []
+    for item in request.headers.get("accept", "").split(","):
+        parts = [p.strip() for p in item.split(";")]
+        media_type = parts[0]
+        if not media_type:
+            continue
+        is_zero_q = False
+        for param in parts[1:]:
+            k, eq, v = param.partition("=")
+            if eq and k.strip().lower() == "q":
+                try:
+                    if float(v.strip()) == 0.0:
+                        is_zero_q = True
+                        break
+                except ValueError:
+                    pass
+        if not is_zero_q:
+            types.append(media_type)
+    return types
 
 
 def _github_media(request: Request, name: str) -> bool:
